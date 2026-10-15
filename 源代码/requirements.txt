@@ -1,0 +1,9 @@
+# 网络优化助手 - 依赖包
+# 注意：tkinter是Python内置库，无需额外安装
+
+# 运行时必需依赖
+PySide6>=6.0
+psutil>=5.9
+
+# 打包工具
+pyinstaller>=5.0
