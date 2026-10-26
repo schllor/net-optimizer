@@ -11,14 +11,35 @@
   4. 稳定性：所有源失败时优雅降级为不可用，不影响其它指标。
 """
 
+import re
 import time
 import socket
+import platform
 import threading
 import http.client
 import urllib.parse
 import urllib.request
 import urllib.error
 import concurrent.futures
+
+from .cmd_utils import smart_run
+
+
+# Windows/Linux ping 回复行中的单次 RTT，例如「时间=12ms」「时间<1ms」「time=12ms」
+_PING_TIME_RE = re.compile(
+    r"(?:时间|time)\s*(?:[=＝]\s*)?(<)?\s*([\d.]+)\s*ms", re.IGNORECASE)
+
+
+def parse_ping_times(text):
+    """从 ping 输出中提取全部单次 RTT（毫秒）。`<1ms` 按 0.5ms 计。"""
+    samples = []
+    for lt, value in _PING_TIME_RE.findall(text or ""):
+        try:
+            rtt = float(value)
+        except ValueError:
+            continue
+        samples.append(0.5 if lt else rtt)
+    return samples
 
 
 # 下载测速源（混合方案，任一可达即算成功，兼顾国内外网络）：
@@ -27,7 +48,7 @@ import concurrent.futures
 #  - 避免使用已被 GFW 阻断的 jsdelivr 等境外静态源
 TEST_URLS = [
     "https://speed.cloudflare.com/__down?bytes=16000000",
-    "https://speed.cloudflare.com/__down?bytes=16000000",
+    "https://speed.cloudflare.com/__down?bytes=10000000",
     "https://cdn.npmmirror.com/binaries/node/v20.11.0/node-v20.11.0-x64.msi",
     "https://dldir1.qq.com/weixin/Windows/WeChatSetup_x86.exe",
     "https://registry.npmmirror.com/typescript/-/typescript-5.5.4.tgz",
@@ -57,65 +78,71 @@ class SpeedTest:
 
     def __init__(self):
         self.is_running = False
+        self._cancel = threading.Event()
+
+    def cancel(self):
+        """请求取消当前测速：各阶段会在下一个检查点尽快退出。"""
+        self._cancel.set()
+
+    def is_cancelled(self):
+        return self._cancel.is_set()
 
     # ---------------- 延迟测试（含 Jitter / 丢包） ----------------
     def ping_test(self, host="www.baidu.com", count=5, timeout_ms=2000):
-        """逐次采样 RTT，返回平均/最小/最大/抖动/丢包率。
-        相比一次 ping 拿平均：能算出抖动(Jitter)与更真实的延迟分布。
+        """采样 RTT，返回平均/最小/最大/抖动/丢包率。
+
+        Windows 下用一次 `ping -n count` 收集全部样本（而不是逐个进程调用），
+        可减少进程启动开销，并统一走 smart_run 自适应 GBK/UTF-8 输出。
         """
-        import subprocess
-        import re
-        import platform
+        if self._cancel.is_set():
+            return self._empty_ping_result(host)
 
-        is_windows = platform.system() == "Windows"
         samples = []
-        sent = 0
-
-        for _ in range(count):
-            sent += 1
-            try:
-                if is_windows:
-                    result = subprocess.run(
-                        ["ping", "-n", "1", "-w", str(timeout_ms), host],
-                        capture_output=True, text=True, encoding="gbk", errors="replace",
-                        timeout=timeout_ms // 1000 + 2,
-                    )
-                    out = result.stdout or ""
-                    m = re.search(r"时间\s*[=＝]\s*([\d.]+)\s*ms", out)
-                    if not m:
-                        m = re.search(r"time\s*[=＝]\s*([\d.]+)\s*ms", out, re.IGNORECASE)
-                    if m:
-                        samples.append(float(m.group(1)))
-                else:
-                    start = time.time()
+        sent = count
+        if platform.system() == "Windows":
+            total_timeout = max(6, int(count * (timeout_ms / 1000.0) + 3))
+            result = smart_run(
+                ["ping", "-n", str(count), "-w", str(timeout_ms), host],
+                timeout=total_timeout)
+            samples = parse_ping_times(result.stdout or "")
+        else:
+            for _ in range(count):
+                if self._cancel.is_set():
+                    break
+                try:
+                    start = time.perf_counter()
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     s.settimeout(timeout_ms / 1000)
                     s.connect((host, 80))
                     s.close()
-                    samples.append((time.time() - start) * 1000)
-            except Exception:
-                pass
-            time.sleep(0.05)
+                    samples.append((time.perf_counter() - start) * 1000)
+                except Exception:
+                    pass
+                time.sleep(0.05)
 
         if not samples:
-            return {
-                "host": host, "avg_latency": 0, "jitter_ms": 0,
-                "min_latency": 0, "max_latency": 0,
-                "loss_rate": 100, "samples": 0, "success": False,
-            }
+            return self._empty_ping_result(host)
 
         avg = sum(samples) / len(samples)
         jitter = sum(abs(b - a) for a, b in zip(samples, samples[1:])) / max(len(samples) - 1, 1)
-        loss_rate = round((sent - len(samples)) / sent * 100, 1)
+        loss_rate = round((sent - len(samples)) / sent * 100, 1) if sent else 100
         return {
             "host": host,
             "avg_latency": round(avg, 1),
             "jitter_ms": round(jitter, 1),
             "min_latency": round(min(samples), 1),
             "max_latency": round(max(samples), 1),
-            "loss_rate": loss_rate,
+            "loss_rate": max(0.0, loss_rate),
             "samples": len(samples),
             "success": True,
+        }
+
+    @staticmethod
+    def _empty_ping_result(host):
+        return {
+            "host": host, "avg_latency": 0, "jitter_ms": 0,
+            "min_latency": 0, "max_latency": 0,
+            "loss_rate": 100, "samples": 0, "success": False,
         }
 
     def multi_ping_test(self, hosts, count=3):
@@ -147,6 +174,8 @@ class SpeedTest:
             })
             with urllib.request.urlopen(req, timeout=12) as response:
                 while True:
+                    if self._cancel.is_set():
+                        return None
                     chunk = response.read(CHUNK_BYTES)
                     if not chunk:
                         break
@@ -188,6 +217,8 @@ class SpeedTest:
 
     def download_speed_test(self, progress_callback=None, live_callback=None):
         """并发多源下载：聚合带宽接近真实上限，实时上报瞬时速度"""
+        if self._cancel.is_set():
+            return {"success": False, "cancelled": True}
         lock = threading.Lock()
         totals = {"downloaded": 0, "time": 0.0, "count": 0}
         best_live = {"mbps": 0.0}
@@ -254,6 +285,8 @@ class SpeedTest:
             last_sent = 0
             chunk = bytes(CHUNK_BYTES)
             while sent < payload:
+                if self._cancel.is_set():
+                    return None
                 if time.time() - start >= UPLOAD_MAX_SECONDS:
                     break
                 n = min(CHUNK_BYTES, payload - sent)
@@ -269,6 +302,8 @@ class SpeedTest:
                     last_report = now
                     last_sent = sent
 
+            if self._cancel.is_set():
+                return None
             resp = conn.getresponse()
             resp.read()
             elapsed = time.time() - start
@@ -288,6 +323,8 @@ class SpeedTest:
 
     def upload_speed_test(self, progress_callback=None, live_callback=None):
         """多并发上传：聚合所有连接的上行带宽，实时上报"""
+        if self._cancel.is_set():
+            return {"success": False, "cancelled": True}
         lock = threading.Lock()
         totals = {"sent": 0, "time": 0.0, "count": 0}
         best_live = {"mbps": 0.0}
@@ -337,44 +374,53 @@ class SpeedTest:
     # ---------------- 完整测速 ----------------
     def run_full_test(self, progress_callback=None, status_callback=None,
                       live_callback=None, uplive_callback=None):
-        """完整测速：延迟 + 上传 + 下载（支持实时速度回调）"""
+        """完整测速：延迟 + 上传 + 下载（支持实时速度回调与中途取消）"""
+        self._cancel.clear()
         self.is_running = True
         results = {}
-
-        if status_callback:
-            status_callback("正在测试网络延迟...")
-        results["ping"] = self.ping_test()
-        if progress_callback:
-            progress_callback(10)
-
-        if status_callback:
-            status_callback("正在并发测速（上传）...")
-
-        def up_progress(p):
+        try:
+            if status_callback:
+                status_callback("正在测试网络延迟...")
+            results["ping"] = self.ping_test()
             if progress_callback:
-                progress_callback(10 + int(p * 0.2))
+                progress_callback(10)
 
-        results["upload"] = self.upload_speed_test(up_progress, uplive_callback)
+            if self._cancel.is_set():
+                results["cancelled"] = True
+                return results
 
-        if progress_callback:
-            progress_callback(35)
+            if status_callback:
+                status_callback("正在并发测速（上传）...")
 
-        if status_callback:
-            status_callback("正在并发下载测速（多源）...")
+            def up_progress(p):
+                if progress_callback:
+                    progress_callback(10 + int(p * 0.2))
 
-        def speed_progress(p):
+            results["upload"] = self.upload_speed_test(up_progress, uplive_callback)
+
             if progress_callback:
-                progress_callback(35 + int(p * 0.6))
+                progress_callback(35)
 
-        results["download"] = self.download_speed_test(speed_progress, live_callback)
+            if self._cancel.is_set():
+                results["cancelled"] = True
+                return results
 
-        if progress_callback:
-            progress_callback(100)
-        if status_callback:
-            status_callback("测速完成！")
+            if status_callback:
+                status_callback("正在并发下载测速（多源）...")
 
-        self.is_running = False
-        return results
+            def speed_progress(p):
+                if progress_callback:
+                    progress_callback(35 + int(p * 0.6))
+
+            results["download"] = self.download_speed_test(speed_progress, live_callback)
+
+            if progress_callback:
+                progress_callback(100)
+            if status_callback:
+                status_callback("测速完成！")
+            return results
+        finally:
+            self.is_running = False
 
     # ---------------- 评级 ----------------
     def get_speed_level(self, speed_mbps):

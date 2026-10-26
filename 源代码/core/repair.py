@@ -5,10 +5,9 @@
 
 import subprocess
 import platform
-import socket
 import os
 
-from .cmd_utils import smart_run
+from .cmd_utils import smart_run, run_cmd_bytes
 
 
 def is_admin():
@@ -30,8 +29,10 @@ def relaunch_as_admin():
         import ctypes
         import sys
         exe_path = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
+        # 透传命令行参数，避免提权重启后丢失运行参数
+        params = subprocess.list2cmdline(sys.argv[1:]) if len(sys.argv) > 1 else ""
         result = ctypes.windll.shell32.ShellExecuteW(
-            None, "runas", exe_path, "", None, 1)
+            None, "runas", exe_path, params, None, 1)
         # 返回值 > 32 表示提权启动成功
         return result > 32
     except Exception:
@@ -146,8 +147,12 @@ class NetworkRepair:
                 # 无管理员权限时不释放IP，避免释放后无法续订造成断网
                 if not self.is_admin:
                     return False, "需要管理员权限。为避免断网，本次未执行IP释放/续订。请右键以管理员身份运行后再试"
-                # 释放IP
+                # 释放IP：失败时不要继续 renew，否则用户可能直接断网
                 release_result = smart_run(["ipconfig", "/release"], timeout=10)
+                if release_result.returncode != 0:
+                    return False, (
+                        f"IP释放失败（返回码: {release_result.returncode}），"
+                        "已跳过续订以避免断网。请确认以管理员身份运行后重试")
                 # 重新获取
                 result = smart_run(["ipconfig", "/renew"], timeout=15)
                 combined = (result.stdout + "\n" + result.stderr).lower()
@@ -168,28 +173,24 @@ class NetworkRepair:
         """清除代理设置"""
         try:
             if self.is_windows:
-                # 禁用代理
-                result1 = subprocess.run(
+                # 禁用代理（统一走 run_cmd_bytes：隐藏控制台窗口）
+                code1, _ = run_cmd_bytes(
                     ["reg", "add",
                      r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-                     "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f"],
-                    capture_output=True, timeout=5
-                )
+                     "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f"], timeout=5)
                 # 清除代理服务器地址
-                result2 = subprocess.run(
+                code2, _ = run_cmd_bytes(
                     ["reg", "add",
                      r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-                     "/v", "ProxyServer", "/t", "REG_SZ", "/d", "", "/f"],
-                    capture_output=True, timeout=5
-                )
-                if result1.returncode == 0 and result2.returncode == 0:
+                     "/v", "ProxyServer", "/t", "REG_SZ", "/d", "", "/f"], timeout=5)
+                if code1 == 0 and code2 == 0:
                     return True, "代理设置已清除"
                 else:
                     errors = []
-                    if result1.returncode != 0:
-                        errors.append(f"禁用代理(返回码:{result1.returncode})")
-                    if result2.returncode != 0:
-                        errors.append(f"清除代理地址(返回码:{result2.returncode})")
+                    if code1 != 0:
+                        errors.append(f"禁用代理(返回码:{code1})")
+                    if code2 != 0:
+                        errors.append(f"清除代理地址(返回码:{code2})")
                     return False, f"代理清除部分失败: {', '.join(errors)}"
             else:
                 os.environ.pop("HTTP_PROXY", None)

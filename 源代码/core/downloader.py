@@ -115,6 +115,7 @@ class Downloader:
         self._chunks = []            # [(start, end), ...]
         self._chunk_pos = {}         # {index: 当前已写到的 offset}
         self._cond_lock = threading.Lock()
+        self._state_lock = threading.RLock()
         self._cancel = threading.Event()
         self._pause = threading.Event()
         self._pause.set()            # 默认不暂停
@@ -281,6 +282,9 @@ class Downloader:
             t.join()
 
         self._finish_check()
+        # 用户主动取消时立即落盘进度，下次「开始下载」可接着续传
+        if self._cancel.is_set() and not self.completed:
+            self._save_state_quiet()
         return self
 
     def _worker(self, idx, start, end):
@@ -324,10 +328,7 @@ class Downloader:
                                     with self._cond_lock:
                                         self.done_bytes += len(chunk)
                                     self._chunk_pos[idx] = pos
-                                    now = time.time()
-                                    if now - self._state_timer >= 1.0:
-                                        self._save_state_quiet()
-                                        self._state_timer = now
+                                    self._maybe_save_state()
                             break   # 本分段下载完成，成功退出重试循环
                         except (urllib.error.HTTPError, urllib.error.URLError, OSError, socket.timeout, ValueError) as _e:
                             retry += 1
@@ -369,6 +370,18 @@ class Downloader:
                 if not self.error:
                     self.error = "下载连接中断，可点击继续续传"
 
+    def _maybe_save_state(self):
+        """多线程安全地限频保存进度（每段每秒最多触发一次落盘）。"""
+        now = time.time()
+        with self._state_lock:
+            if now - self._state_timer < 1.0:
+                return
+            self._state_timer = now
+            try:
+                self._save_state()
+            except Exception:
+                pass
+
     def _save_state_quiet(self):
         try:
             self._save_state()
@@ -384,10 +397,11 @@ class Downloader:
             "total": self.total_size,
             "chunks": {str(k): v for k, v in self._chunk_pos.items()},
         }
-        tmp = self.state_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        os.replace(tmp, self.state_path)
+        with self._state_lock:
+            tmp = self.state_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp, self.state_path)
 
     def _finish_check(self):
         """下载结束后统一判定完成状态，完成则清理续传标记"""

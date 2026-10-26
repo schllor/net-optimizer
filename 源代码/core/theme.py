@@ -12,11 +12,11 @@ SHADOW_DARK = "#454d52"
 SHADOW_LIGHT = "#202020"
 BORDER = "#363d42"
 
-# Electric green is reserved for actions, active states, and progress.
-ACCENT = "#00d992"
-ACCENT_DARK = "#00b87b"
-ACCENT_LIGHT = "#173f35"
-FOCUS = "#5eead4"
+# Cool white is reserved for actions, active states, and progress.
+ACCENT = "#e6edf4"
+ACCENT_DARK = "#c7d3e0"
+ACCENT_LIGHT = "#1d262e"
+FOCUS = "#f2f7fc"
 
 # Semantic colors are reserved for diagnostic and operation states.
 SUCCESS = "#63d6a0"
@@ -32,7 +32,7 @@ TEXT_MAIN = "#f2f2f2"
 TEXT_SECONDARY = "#c4cbd0"
 TEXT_LIGHT = "#8e989e"
 TEXT_WHITE = "#ffffff"
-TEXT_ON_ACCENT = "#06140f"
+TEXT_ON_ACCENT = "#0b1116"
 
 # Compact geometry for a quiet utility interface.
 RADIUS = "8px"
@@ -127,13 +127,18 @@ def accent_inline(radius=RADIUS_SMALL):
 
 
 def nav_button(active=False):
-    """Sidebar navigation with a subtle active rail."""
+    """侧栏导航项。
+
+    沿用参考设计的「填充圆角块」选中态，取本主题的强调色（冷调白，主题中
+    即用于 active 状态），块内文字用深色 TEXT_ON_ACCENT 保证对比度；
+    未选中为透明底次级灰字，悬停时给一层侧栏浅色底衬。
+    """
     if active:
         return (
             "QPushButton {"
-            f"color: {TEXT_MAIN}; background-color: {BG_SIDEBAR_HOVER};"
-            f"border: none; border-left: 3px solid {ACCENT};"
-            "text-align: left; padding-left: 19px;"
+            f"color: {TEXT_ON_ACCENT}; background-color: {ACCENT};"
+            f"border: none; border-radius: {RADIUS_SMALL};"
+            "text-align: left; padding-left: 12px;"
             "font-size: 14px; font-weight: bold;"
             "}"
         )
@@ -141,11 +146,12 @@ def nav_button(active=False):
         "QPushButton {"
         f"color: {TEXT_SECONDARY}; background-color: transparent;"
         "border: none;"
-        "text-align: left; padding-left: 22px;"
+        "text-align: left; padding-left: 12px;"
         "font-size: 14px;"
         "}"
         "QPushButton:hover {"
         f"color: {TEXT_MAIN}; background-color: {BG_SIDEBAR_HOVER};"
+        f"border-radius: {RADIUS_SMALL};"
         "}"
     )
 

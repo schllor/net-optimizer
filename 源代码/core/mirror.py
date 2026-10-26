@@ -12,7 +12,7 @@
 import time
 import urllib.request
 import urllib.error
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 
 USER_AGENT = "Mozilla/5.0 NetHelper/1.0"
 PROBE_TIMEOUT = 3.5     # 单个候选镜像探测超时（秒），避免拖慢下载启动
@@ -119,10 +119,14 @@ def pick_fastest_url(url):
     workers = min(MAX_PROBE, len(cands))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = [ex.submit(_probe_one, c) for c in cands]
-        for f in futs:
-            r = f.result()
-            if r:
-                found.append(r)
+        # 按完成顺序收集：先返回的候选先入池，不必等最慢的探测结束
+        try:
+            for f in as_completed(futs, timeout=PROBE_TIMEOUT + 1.0):
+                r = f.result()
+                if r:
+                    found.append(r)
+        except FuturesTimeout:
+            pass
     if not found:
         return url
     # 优先支持 Range(206) 的镜像，其次耗时最短

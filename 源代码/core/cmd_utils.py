@@ -6,10 +6,26 @@
   - 不预设编码：先捕获原始字节，再逐条自动检测（UTF-8 严格优先，失败则回退 GBK/GB18030）。
   - 超时更宽松：netsh wlan 系列在部分机器上首次调用较慢，默认 12 秒。
   - 永不抛错：超时或异常都安全返回，方便上层做兜底判断。
+  - 隐藏控制台窗口：GUI 程序调用命令行时不再闪出黑色 cmd 窗口。
 """
 
+import platform
 import subprocess
 from types import SimpleNamespace
+
+_IS_WINDOWS = platform.system() == "Windows"
+_CREATE_NO_WINDOW = 0x08000000  # subprocess.CREATE_NO_WINDOW，仅 Windows 有效
+
+
+def subprocess_kwargs():
+    """返回创建子进程时隐藏控制台窗口的参数（非 Windows 返回空字典）。
+
+    打包成窗口程序后，每次调用 ping/ipconfig 都会弹出一个黑色控制台窗口，
+    对新手用户非常吓人。统一加上 CREATE_NO_WINDOW 可彻底消除该现象。
+    """
+    if _IS_WINDOWS:
+        return {"creationflags": _CREATE_NO_WINDOW}
+    return {}
 
 
 def smart_decode(data, default="utf-8"):
@@ -30,6 +46,17 @@ def smart_decode(data, default="utf-8"):
     return data.decode(default, errors="replace")
 
 
+def _partial_bytes(exc):
+    """收集超时异常里已经产生的 stdout/stderr 字节。"""
+    parts = []
+    for stream in (getattr(exc, "stdout", None), getattr(exc, "stderr", None)):
+        if isinstance(stream, bytes):
+            parts.append(stream)
+        elif isinstance(stream, str):
+            parts.append(stream.encode("utf-8", "replace"))
+    return b"".join(parts)
+
+
 def run_cmd(cmd, timeout=12):
     """安全执行命令并返回智能解码后的统一文本（含 stdout+stderr），永不抛错。"""
     try:
@@ -37,12 +64,13 @@ def run_cmd(cmd, timeout=12):
             cmd,
             capture_output=True,
             timeout=timeout,
+            **subprocess_kwargs(),
             # 不设 text/encoding，直接拿原始字节交给 smart_decode
         )
     except subprocess.TimeoutExpired as e:
-        tail = getattr(e, "stdout", None) or b""
-        prefix = f"(命令 {command_str(cmd)} 执行超时({timeout}s)"
-        return prefix + "\n" + smart_decode(tail)
+        tail = _partial_bytes(e)
+        prefix = f"(命令 {command_str(cmd)} 执行超时({timeout}s))"
+        return prefix + ("\n" + smart_decode(tail) if tail else "")
     except Exception as e:
         return f"(命令 {command_str(cmd)} 执行失败：{e})"
 
@@ -51,10 +79,13 @@ def run_cmd(cmd, timeout=12):
 
 
 def run_cmd_bytes(cmd, timeout=12):
-    """安全执行命令，返回 (返回码, 原始字节)；超时/异常返回 (None, b"")。"""
+    """安全执行命令，返回 (返回码, 原始字节)；超时/异常返回 (None, 已有输出/空)。"""
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        proc = subprocess.run(
+            cmd, capture_output=True, timeout=timeout, **subprocess_kwargs())
         return proc.returncode, (proc.stdout or b"") + (proc.stderr or b"")
+    except subprocess.TimeoutExpired as e:
+        return None, _partial_bytes(e)
     except Exception:
         return None, b""
 

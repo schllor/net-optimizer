@@ -31,7 +31,7 @@ class TrafficMonitor:
         if not self.enabled:
             return None, None
         try:
-            now = time.time()
+            now = time.monotonic()   # 单调时钟：不受系统校时/夏令时影响
             c = _psutil.net_io_counters()  # 全部网卡累计
             cur = (c.bytes_sent, c.bytes_recv)
             if self._prev_bytes is None:
@@ -39,8 +39,11 @@ class TrafficMonitor:
                 self._prev_time = now
                 return None, None
             dt = now - self._prev_time
-            up = (cur[0] - self._prev_bytes[0]) / dt if dt > 0 else 0.0
-            dn = (cur[1] - self._prev_bytes[1]) / dt if dt > 0 else 0.0
+            # 网卡重置/驱动重载时计数器会回退，按 0 处理而不是产生负速度
+            delta_up = max(0, cur[0] - self._prev_bytes[0])
+            delta_dn = max(0, cur[1] - self._prev_bytes[1])
+            up = delta_up / dt if dt > 0 else 0.0
+            dn = delta_dn / dt if dt > 0 else 0.0
             self._prev_bytes = cur
             self._prev_time = now
             return up, dn
