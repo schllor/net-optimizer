@@ -10,12 +10,21 @@
 
 | 功能 | 说明 |
 | --- | --- |
-| 一键诊断 | 自动检查网卡、IP、网关、DNS、互联网连通性、代理等多项状态（7 项检测并发执行），支持一键复制诊断报告 |
+| 一键诊断 | 自动检查网卡、IP、网关、DNS、互联网连通性、代理等多项状态（7 项检测并发执行），可复制或**导出报告** |
 | 一键修复 | 刷新 DNS 缓存、重置 Winsock / TCP-IP、释放重获 IP、清除代理，修复后可一键重新诊断 |
-| 网速测试 | 测量网络延迟（Ping）与上下行速度，并给出评级建议，测试过程可随时取消 |
-| DNS 优化 | 批量并发测试常用 DNS 延迟，按速度排名并推荐最优 DNS，测试过程可取消 |
-| Wi-Fi 检测 | 读取信号强度、信道、速率，并给出改善建议 |
-| 局域网设备 | 扫描当前网络下的活跃设备，支持**自定义设备名称**、限速 / 封禁操作引导 |
+| 网速测试 | HTTP 首字节延迟（P50/P95/抖动/丢包）+ 多流并发上下行，按稳定窗口计算速度，测试过程可随时取消 |
+| DNS 优化 | 多轮热/冷域名查询，按 P95 排名，推荐最优 DNS，并校验 DoH 可用性；支持备份后恢复自动获取 |
+| Wi-Fi 检测 | 原生 WlanAPI 读取信号强度、信道、速率；可扫描附近网络并给出信道建议 |
+| 局域网设备 | 读取系统邻居表并用 ARP 验证在线状态，支持**自定义设备名称**、限速 / 封禁操作引导 |
+| 设置 | 测速时长、DNS 轮数、历史条数、原生 API 开关、VPN 流量统计与界面动画 |
+
+### v1.8.0 优化要点
+
+- **原生探测（v1.8.0）**：Wi-Fi 状态/信道、附近网络扫描、当前 DNS 与局域网邻居改为 Windows 原生接口（WlanAPI、GetAdaptersAddresses、GetIpNetTable2 + SendARP），不再依赖 `netsh` / `ipconfig` / `arp` 的中文标签；原生调用失败时自动回退命令行，可用环境变量 `NETHELPER_NATIVE=0` 强制旧路径。
+- **测速方法（v1.8.0）**：下载改为 4 路并发并按单流增长自适应加到 8 路，用 3 秒稳定窗口计算速度（剔除爬坡段），不再取「最慢源的耗时」；上传按确认字节统计；延迟优先用 HTTP 首字节（不受 ICMP 限速影响），输出 P50 / P95 / RFC3550 抖动 / 丢包。
+- **DNS 方法（v1.8.0）**：每轮「1 个热门域名 + 1 个随机冷域名」，`NXDOMAIN` 视为正常响应，每台服务器多轮采样后按 P95 排序；`ping` 只作为「可连通」标记，不再参与排名；对前三名校验 DoH（RFC 8484），应用前备份原 DNS，失败自动回滚。
+- **体验与可观测（v1.8.0）**：后台任务新增统一错误通道，异常时状态栏提示并复位按钮（不再永久禁用）；诊断/修复/设备扫描可取消；新增设置页、报告导出（Markdown / JSON / TXT）与历史记录详情；实时流量采样移出界面线程。
+- **稳健性（v1.8.0）**：命令执行超时/取消不再把提示文字混入输出；下载线程带截止时间退出；SSRF 校验改用 `ipaddress` 并逐跳校验重定向；数据目录不可写时回退到 `%LOCALAPPDATA%`。
 
 ### v1.6.0 / v1.6.1 / v1.6.2 / v1.7.0 / v1.7.1 / v1.7.2 优化要点
 
@@ -83,22 +92,31 @@ pyinstaller 网络优化助手.spec --noconfirm
     │   ├── diagnostic.py    #   网络诊断
     │   ├── repair.py        #   网络修复
     │   ├── speed_test.py    #   网速测试
-    │   ├── dns_optimizer.py #   DNS 测速与切换
+    │   ├── net_quality.py   #   延迟统计、抖动与稳定窗口吞吐
+    │   ├── dns_optimizer.py #   DNS 测速、DoH 校验与切换
     │   ├── wifi_check.py    #   Wi-Fi 检测
     │   ├── lan_scan.py      #   局域网设备扫描
+    │   ├── winapi_common.py #   原生 API 加载与 WLAN 会话
+    │   ├── winapi_wifi.py   #   WlanAPI：当前连接与 BSS 扫描
+    │   ├── winapi_net.py    #   GetAdaptersAddresses：DNS 服务器
+    │   ├── winapi_arp.py    #   GetIpNetTable2 / SendARP 邻居探测
+    │   ├── admin.py         #   管理员权限检测与提权
+    │   ├── settings.py      #   用户设置（JSON 原子写入）
+    │   ├── report.py        #   报告渲染与导出（MD/JSON/TXT）
     │   ├── traffic_monitor.py # 实时流量采集
     │   ├── cache.py         #   历史记录与设备名称缓存
     │   ├── cmd_utils.py     #   系统命令封装
+    │   ├── netinfo.py       #   路由、网关与 DNS 信息解析
     │   ├── theme.py         #   黑白极简主题
     │   └── paths.py         #   运行路径处理
     ├── ui/
     │   ├── main_window.py   # 主窗口：模块装配、导航、线程生命周期
     │   ├── shell.py         # 窗口骨架：侧边栏、内容区、全局样式与调色板
     │   ├── titlebar.py      # 自绘标题栏（无边框窗口的拖动与窗口按钮）
-    │   ├── workers.py       # 后台工作线程（诊断/修复/测速/DNS/Wi-Fi/扫描/下载）
+    │   ├── workers.py       # 后台工作线程（诊断/修复/测速/DNS/Wi-Fi/扫描/下载/流量）
     │   ├── common.py        # 公共配色别名与状态等级映射
     │   ├── widgets.py       # 自定义控件（信号弧、评分环、延迟条、顶部彗星进度条）
-    │   └── pages/           # 九个功能页面（按功能拆分的 mixin）
+    │   └── pages/           # 十个功能页面（按功能拆分的 mixin）
     │       ├── home.py      #   首页
     │       ├── diagnose.py  #   网络诊断
     │       ├── repair.py    #   网络修复
@@ -107,7 +125,8 @@ pyinstaller 网络优化助手.spec --noconfirm
     │       ├── devices.py   #   设备管理
     │       ├── wifi.py      #   Wi-Fi 检测
     │       ├── downloader.py#   多线程下载器
-    │       └── history.py   #   历史记录
+    │       ├── history.py   #   历史记录
+    │       └── settings.py  #   设置
     ├── tests/               # 单元测试
     ├── fonts/               # 字体目录（不含专有字体）
     ├── requirements.txt
@@ -119,8 +138,8 @@ pyinstaller 网络优化助手.spec --noconfirm
 ## 技术栈
 
 - **界面**：PySide6 (Qt6)，Fusion 风格 + 自定义 QSS 主题
-- **系统信息**：psutil
-- **网络操作**：调用系统 `netsh` / `ipconfig` / `ping` 等命令，封装于 `core/cmd_utils.py`
+- **系统信息**：psutil（可选，用于流量统计兜底）
+- **Windows 原生接口**：ctypes 调用 WlanAPI / IP Helper API，无需额外依赖；失败时回退 `netsh` / `ipconfig` / `arp`
 - **打包**：PyInstaller（单文件；排除 Qt3D / WebEngine / Multimedia / QML / PDF / 图片解码 / 翻译包等无关组件，EXE 约 31MB）
 
 ---
@@ -129,10 +148,10 @@ pyinstaller 网络优化助手.spec --noconfirm
 
 本项目在设计上遵循**最小权限、最小采集**原则：
 
-- **只读扫描**：局域网设备扫描基于系统 `arp -a` 的只读输出，不发送探测包、不修改任何路由配置。
+- **只读扫描**：局域网设备扫描读取系统邻居表（`GetIpNetTable2` / `arp -a`），并对同子网设备发送标准 ARP 查询确认是否在线；不修改任何路由配置。
 - **不篡改路由器**：限速 / 封禁等操作不会直接修改路由器设置，仅复制目标设备的 MAC 地址并引导用户在路由器管理页自行操作。
-- **数据仅存本地**：诊断历史、修复记录、设备自定义名称等全部保存在程序目录的 `data/` 文件夹内，**不上传任何服务器**，无遥测、无账号体系。
-- **修复操作**：一键修复执行的是标准的网络重置命令（`ipconfig /flushdns`、`netsh winsock reset` 等），执行前均有二次确认，不会破坏系统。
+- **数据仅存本地**：诊断历史、修复记录、设备自定义名称、设置与导出报告等全部保存在程序目录的 `data/` 文件夹内（不可写时回退 `%LOCALAPPDATA%\网络优化助手`），**不上传任何服务器**，无遥测、无账号体系。
+- **修复与 DNS 操作**：一键修复执行标准的网络重置命令（`ipconfig /flushdns`、`netsh winsock reset` 等），应用 DNS 前会备份原配置，失败自动回滚；所有写操作均有二次确认。
 - **仓库不含隐私数据**：`.gitignore` 已屏蔽 `data/` 目录、运行日志、构建产物与专有字体，仓库中仅包含源代码与文档。
 
 ---
