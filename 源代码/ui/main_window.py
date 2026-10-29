@@ -8,7 +8,7 @@
 import time
 
 from PySide6.QtWidgets import QMainWindow, QFrame, QMessageBox
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt, QEvent
 
 from core.diagnostic import NetworkDiagnostic
 from core.repair import NetworkRepair, relaunch_as_admin
@@ -23,6 +23,7 @@ from core.version import __version__
 import core.theme as theme
 from ui.common import Colors
 from ui.shell import ShellMixin
+from ui.titlebar import WindowGrip
 from ui.pages import (
     HomePageMixin, DiagnosePageMixin, RepairPageMixin, SpeedPageMixin,
     DnsPageMixin, DevicesPageMixin, WifiPageMixin, DownloaderPageMixin,
@@ -37,6 +38,12 @@ class MainWindow(ShellMixin, HomePageMixin, DiagnosePageMixin, RepairPageMixin,
 
     def __init__(self):
         super().__init__()
+        # 系统标题栏是浅色的，压在深色界面上会多出一条白条；
+        # 改为无边框窗口 + ui/titlebar.py 的自绘标题栏
+        self.setWindowFlags(
+            Qt.Window | Qt.FramelessWindowHint | Qt.WindowSystemMenuHint
+            | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
+            | Qt.WindowCloseButtonHint)
         self.setWindowTitle(f"网络优化助手 v{__version__}")
         self.setMinimumSize(1024, 680)
         self.resize(1120, 740)
@@ -70,6 +77,7 @@ class MainWindow(ShellMixin, HomePageMixin, DiagnosePageMixin, RepairPageMixin,
         self._closing = False
 
         self._setup_ui()
+        self._setup_window_grips()
         self._setup_styles()
         self._normalize_label_backgrounds()
 
@@ -166,6 +174,42 @@ class MainWindow(ShellMixin, HomePageMixin, DiagnosePageMixin, RepairPageMixin,
         else:
             bar.set_progress(value)
 
+
+    def _setup_window_grips(self):
+        """无边框窗口的四边/四角缩放热区（系统边框被去掉后由它们发起缩放）。"""
+        specs = (
+            ("left", (Qt.LeftEdge,), Qt.SizeHorCursor),
+            ("right", (Qt.RightEdge,), Qt.SizeHorCursor),
+            ("top", (Qt.TopEdge,), Qt.SizeVerCursor),
+            ("bottom", (Qt.BottomEdge,), Qt.SizeVerCursor),
+            ("top-left", (Qt.LeftEdge, Qt.TopEdge), Qt.SizeFDiagCursor),
+            ("top-right", (Qt.RightEdge, Qt.TopEdge), Qt.SizeBDiagCursor),
+            ("bottom-left", (Qt.LeftEdge, Qt.BottomEdge), Qt.SizeBDiagCursor),
+            ("bottom-right", (Qt.RightEdge, Qt.BottomEdge), Qt.SizeFDiagCursor),
+        )
+        self._grips = [WindowGrip(self, anchor, edges, cursor, self)
+                       for anchor, edges, cursor in specs]
+        self._layout_window_grips()
+
+    def _layout_window_grips(self):
+        grips = getattr(self, "_grips", None)
+        if not grips:
+            return
+        visible = not (self.isMaximized() or self.isFullScreen())
+        for grip in grips:
+            grip.place(self.width(), self.height())
+            grip.setVisible(visible)
+            if visible:
+                grip.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._layout_window_grips()
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.WindowStateChange:
+            self._layout_window_grips()
+        super().changeEvent(event)
 
     def closeEvent(self, event):
         """窗口关闭时确保所有线程安全退出"""

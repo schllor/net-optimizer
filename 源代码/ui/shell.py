@@ -15,18 +15,28 @@ from core.theme import (
     RADIUS_SMALL,
 )
 from ui.common import Colors
+from ui.titlebar import TitleBar
 from ui.widgets import CometProgressBar
 
 
 class ShellMixin:
     def _setup_ui(self):
         """设置界面"""
-        # 中央部件
+        # 中央部件：顶部自绘标题栏 + 下方「侧边栏 / 内容区」
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        main_layout = QHBoxLayout(central_widget)
+        outer_layout = QVBoxLayout(central_widget)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        self.title_bar = TitleBar(self)
+        outer_layout.addWidget(self.title_bar)
+
+        body = QWidget()
+        main_layout = QHBoxLayout(body)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+        outer_layout.addWidget(body, 1)
 
         # 左侧导航栏
         self._setup_sidebar(main_layout)
