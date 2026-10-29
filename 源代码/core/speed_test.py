@@ -452,14 +452,3 @@ class SpeedTest:
             return "较高", "warning", "网络延迟较高，可能会影响游戏体验"
         else:
             return "很高", "error", "网络延迟很高，会严重影响上网体验"
-
-    def get_jitter_level(self, jitter_ms):
-        """根据抖动给出评级"""
-        if jitter_ms <= 5:
-            return "稳定", "ok"
-        elif jitter_ms <= 15:
-            return "正常", "ok"
-        elif jitter_ms <= 30:
-            return "有抖动", "warning"
-        else:
-            return "抖动明显", "error"

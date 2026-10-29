@@ -102,11 +102,6 @@ def _probe_one(url):
     return None
 
 
-def _extract_host(url):
-    h = _host_of(url).replace("www.", "") or url
-    return h[:28]
-
-
 def pick_fastest_url(url):
     """
     返回最优下载地址：可用且支持 Range、耗时最短的候选镜像；

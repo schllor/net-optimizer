@@ -13,7 +13,6 @@
 面向新手，接口保持简单：
     get_local_ip()            -> "192.0.2.107" | None
     get_default_gateway()     -> "192.0.2.1"   | None
-    get_default_gateway_info()-> {"gateway","interface","metric","source"} | None
 """
 
 import re
@@ -160,21 +159,3 @@ def get_default_gateway(local_ip=None):
         return parse_gateway_from_ipconfig(output, local_ip)
     except Exception:
         return None
-
-
-def get_default_gateway_info():
-    """获取默认路由详情，返回 {'gateway','interface','metric','source'}；取不到返回 None。"""
-    try:
-        output = smart_run(["route", "print", "-4"], timeout=8).stdout
-        info = parse_route_table_info(output)
-        if info:
-            info = dict(info)
-            info["source"] = "route"
-            return info
-    except Exception:
-        pass
-
-    gateway = get_default_gateway()
-    if gateway:
-        return {"gateway": gateway, "interface": None, "metric": None, "source": "ipconfig"}
-    return None

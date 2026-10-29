@@ -31,9 +31,6 @@ MAX_RETRY = 3                   # 瞬态网络错误自动重试次数
 RETRY_BASE = 0.5                # 退避基数（秒），指数退避 0.5/1/2
 USER_AGENT = "Mozilla/5.0 NetHelper/1.0"
 
-ST = "start"     # 分段状态：未完成
-DONE = "done"    # 分段状态：已完成
-
 
 class DownloadError(Exception):
     pass

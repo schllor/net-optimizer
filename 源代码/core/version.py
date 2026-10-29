@@ -4,4 +4,3 @@
 
 __version__ = "1.7.2"
 APP_NAME = "网络优化助手"
-APP_TITLE = "网络优化助手"

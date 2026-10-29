@@ -76,9 +76,3 @@ def get_logger():
 
     _LOGGER = logger
     return _LOGGER
-
-
-def log_exception(context):
-    """记录异常堆栈，便于定位 Bug"""
-    logger = get_logger()
-    logger.exception("[异常] %s", context)

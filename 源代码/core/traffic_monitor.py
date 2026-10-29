@@ -108,10 +108,6 @@ else:
     _READER = _read_psutil if _HAS_PSUTIL else None
 
 
-def available():
-    return _READER is not None
-
-
 class TrafficMonitor:
     """实时网速采样器：每次 sample() 返回 (上行bytes/s, 下行bytes/s)"""
 
@@ -145,8 +141,3 @@ class TrafficMonitor:
             return up, dn
         except Exception:
             return None, None
-
-    def reset(self):
-        """重采样基线，避免长时间累计后溢出，或切换网卡"""
-        self._prev_bytes = None
-        self._prev_time = None

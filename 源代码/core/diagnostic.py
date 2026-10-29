@@ -255,7 +255,6 @@ class NetworkDiagnostic:
         if not self.results:
             return "未进行诊断", "info"
 
-        ok_count = sum(1 for r in self.results if r["status"] == "ok")
         warning_count = sum(1 for r in self.results if r["status"] == "warning")
         error_count = sum(1 for r in self.results if r["status"] == "error")
 

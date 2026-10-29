@@ -9,7 +9,6 @@ BG_SIDEBAR_HOVER = "#20272a"
 BG_INSET = "#15191c"
 
 SHADOW_DARK = "#454d52"
-SHADOW_LIGHT = "#202020"
 BORDER = "#363d42"
 
 # Cool white is reserved for actions, active states, and progress.
@@ -24,7 +23,6 @@ SUCCESS_LIGHT = "#17372c"
 WARNING = "#e7b86a"
 WARNING_LIGHT = "#3a2f1e"
 ERROR = "#f18484"
-ERROR_LIGHT = "#3a2224"
 INFO_LIGHT = "#20282d"
 
 # Text
@@ -41,17 +39,6 @@ RADIUS_PILL = "8px"
 
 
 # ---------- Flat surfaces with hairline borders ----------
-def _flat(bg, radius):
-    """A flat surface with a restrained outline."""
-    return (
-        "QFrame {"
-        f"background-color: {bg};"
-        f"border-radius: {radius};"
-        f"border: 1px solid {BORDER};"
-        "}"
-    )
-
-
 def raised_card(radius=RADIUS, bg=BG_CARD):
     """A surface separated from the canvas by a precise hairline."""
     return (
@@ -64,11 +51,6 @@ def raised_card(radius=RADIUS, bg=BG_CARD):
         f"border-color: {SHADOW_DARK};"
         "}"
     )
-
-
-def inset_surface(radius=RADIUS_SMALL, bg=BG_INSET):
-    """Inset surface for logs, inputs, and progress tracks."""
-    return _flat(bg, radius)
 
 
 def _solid_button(bg, radius, hover_bg, text_color=TEXT_WHITE):
@@ -96,11 +78,6 @@ def accent_button(radius=RADIUS_PILL):
     return _solid_button(ACCENT, radius, ACCENT_DARK, TEXT_ON_ACCENT)
 
 
-def success_button(radius=RADIUS_PILL):
-    """Semantic success action."""
-    return _solid_button(SUCCESS, radius, "#4fa978", TEXT_ON_ACCENT)
-
-
 def danger_button(radius=RADIUS_PILL):
     """Semantic destructive action."""
     return _solid_button(ERROR, radius, "#cf6262")
@@ -118,12 +95,6 @@ def secondary_button(radius=RADIUS_SMALL):
         f"color: {TEXT_MAIN}; border-color: {SHADOW_DARK}; background-color: {ACCENT_LIGHT};"
         "}"
     )
-
-
-def accent_inline(radius=RADIUS_SMALL):
-    """Compact primary action."""
-    return _solid_button(ACCENT, radius, ACCENT_DARK, TEXT_ON_ACCENT).replace(
-        "font-size: 15px", "font-size: 13px")
 
 
 def nav_button(active=False):
