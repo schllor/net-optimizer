@@ -2,52 +2,35 @@
 网速测试模块 - 测试网络延迟、下载与上传速度
 面向新手小白，用简单易懂的方式展示网速。
 
-测速思路（v1.5 集成开源方案优化）：
-  1. 下载：并发多源聚合，接近真实带宽上限；引入预热期(grace time)跳过 TCP 慢启动，
-     避免低链接开局拉低均值。
-  2. 上传：多并发 POST 固定大小 payload 到公开上传端点(Cloudflare Speed)，流式发送并计时。
-  3. 延迟：逐次采样 RTT，计算出平均/最小/最大/抖动(Jitter)与丢包率，
-     不再是单次的"平均延迟"。
-  4. 稳定性：所有源失败时优雅降级为不可用，不影响其它指标。
+测速思路（v1.8 方法学升级）：
+  1. 延迟：优先用 HTTP 首字节时间（连接复用，不受 ICMP 限速影响），
+     输出 P50/P95、RFC3550 抖动与丢包率；HTTP 全部失败才回退 ping。
+  2. 下载：多流并发（4 路起，按时间自适应补到 8 路），单次请求限量，
+     用「跳过慢启动后的最大 3 秒窗口」计算吞吐，而不是总字节 ÷ 最慢流耗时。
+  3. 上传：多流 keep-alive POST 固定大小分片，按稳定窗口计算上行带宽。
+  4. 稳定性：所有源失败时优雅降级为不可用，不影响其它指标；全程可取消。
 """
 
-import re
-import time
 import socket
 import threading
+import time
 import concurrent.futures
 
-from .cmd_utils import IS_WINDOWS, smart_run
-# urllib / http.client 会在导入时连带解析 email 等模块（约 20ms），
-# 这里按需在测速方法内部导入，避免拖慢程序启动。
+from .net_quality import (
+    ThroughputMeter, http_latency, icmp_latency, parse_ping_times,
+)
 
+# 兼容旧导入：parse_ping_times 已统一到 net_quality
+__all__ = ["SpeedTest", "parse_ping_times", "TEST_URLS"]
 
-# Windows/Linux ping 回复行中的单次 RTT，例如「时间=12ms」「时间<1ms」「time=12ms」
-_PING_TIME_RE = re.compile(
-    r"(?:时间|time)\s*(?:[=＝]\s*)?(<)?\s*([\d.]+)\s*ms", re.IGNORECASE)
-
-
-def parse_ping_times(text):
-    """从 ping 输出中提取全部单次 RTT（毫秒）。`<1ms` 按 0.5ms 计。"""
-    samples = []
-    for lt, value in _PING_TIME_RE.findall(text or ""):
-        try:
-            rtt = float(value)
-        except ValueError:
-            continue
-        samples.append(0.5 if lt else rtt)
-    return samples
-
-
-# 下载测速源（混合方案，任一可达即算成功，兼顾国内外网络）：
+# 下载测速源（任一可达即算成功，兼顾国内外网络）：
 #  - speed.cloudflare.com/__down：官方测速端点，海外/直连时最佳
-#  - npmmirror / dldir1.qq.com：国内阿里、腾讯 CDN，国内网络极快且稳定
-#  - 避免使用已被 GFW 阻断的 jsdelivr 等境外静态源
+#  - npmmirror：国内阿里 CDN，国内网络快且稳定
+#  - 不再使用 .exe 安装包源：版本会下线，链接容易失效
 TEST_URLS = [
-    "https://speed.cloudflare.com/__down?bytes=16000000",
+    "https://speed.cloudflare.com/__down?bytes=20000000",
     "https://speed.cloudflare.com/__down?bytes=10000000",
     "https://cdn.npmmirror.com/binaries/node/v20.11.0/node-v20.11.0-x64.msi",
-    "https://dldir1.qq.com/weixin/Windows/WeChatSetup_x86.exe",
     "https://registry.npmmirror.com/typescript/-/typescript-5.5.4.tgz",
 ]
 DOWNLOAD_FAIL_HINT = (
@@ -59,15 +42,27 @@ DOWNLOAD_FAIL_HINT = (
 UPLOAD_URLS = [
     "https://speed.cloudflare.com/__up",
 ]
-UPLOAD_STREAMS = 3          # 并行上传连接数
-UPLOAD_PAYLOAD = 8 * 1024 * 1024   # 每连接发送 8MB
-UPLOAD_MAX_SECONDS = 12     # 单个连接最多测 12 秒（慢链路兜底，不无限拖时）
 
-MAX_BYTES_PER_SOURCE = 4 * 1024 * 1024   # 每个下载源最多下载 4MB
-CHUNK_BYTES = 64 * 1024                  # 64KB 分块
-GRACE_SECONDS = 0.6                       # 下载预热期：跳过 TCP 慢启动
-GRACE_SKIP_BYTES = 256 * 1024             # 预热期至少流回的数据量（避免把短连接当有效）
-LIVE_INTERVAL = 0.25                     # 实时速度上报间隔（秒）
+DL_DURATION = 8.0                 # 下载测速总时长（秒）
+DL_STREAMS = 4                    # 起始并发连接数
+DL_MAX_STREAMS = 8                # 自适应增加后的上限
+DL_GROWTH_STEPS = (3.0, 5.0)      # 到这两个时间点各补 2 路连接
+DL_SOURCE_CAP = 25 * 1024 * 1024  # 单次请求最多读取 25MB
+DL_WINDOW = 3.0                   # 稳定窗口长度
+DL_RAMP = 0.6                     # 跳过开头的 TCP 慢启动
+
+UL_DURATION = 6.0                 # 上传测速总时长（秒）
+UL_STREAMS = 4                    # 并行上传连接数
+UL_POST_BYTES = 256 * 1024        # 单个 POST 分片大小（keep-alive 复用连接）
+UL_TOTAL_CAP = 64 * 1024 * 1024   # 单连接总发送上限，防止无限流量
+
+CHUNK_BYTES = 64 * 1024
+LIVE_INTERVAL = 0.25
+
+LATENCY_TARGETS = [
+    ("www.baidu.com", "https://www.baidu.com/"),
+    ("speed.cloudflare.com", "https://speed.cloudflare.com/__down?bytes=1000"),
+]
 
 
 class SpeedTest:
@@ -84,61 +79,67 @@ class SpeedTest:
     def is_cancelled(self):
         return self._cancel.is_set()
 
-    # ---------------- 延迟测试（含 Jitter / 丢包） ----------------
-    def ping_test(self, host="www.baidu.com", count=5, timeout_ms=2000):
-        """采样 RTT，返回平均/最小/最大/抖动/丢包率。
+    # ---------------- 延迟测试（HTTP TTFB，ping 兜底） ----------------
+    def latency_test(self, cancel=None):
+        """测量网络延迟：优先 HTTP 首字节时间，返回 P50/P95/抖动/丢包。"""
+        cancel = cancel or self._cancel
+        errors = []
+        for host, url in LATENCY_TARGETS:
+            if cancel.is_set():
+                break
+            try:
+                res = http_latency(url, samples=6, timeout=2.0, cancel=cancel)
+            except Exception as e:
+                errors.append(f"{host}: {e}")
+                continue
+            stats = res["stats"]
+            if res["success"] and stats.count >= 2:
+                return self._latency_result(host, "http", stats)
+            errors.append(f"{host}: 无有效响应")
 
-        Windows 下用一次 `ping -n count` 收集全部样本（而不是逐个进程调用），
-        可减少进程启动开销，并统一走 smart_run 自适应 GBK/UTF-8 输出。
-        """
-        if self._cancel.is_set():
-            return self._empty_ping_result(host)
+        if not cancel.is_set():
+            icmp = self.ping_test("www.baidu.com", count=5, cancel=cancel)
+            if icmp["success"]:
+                return icmp
+        return {
+            "host": "", "method": "", "avg_latency": 0, "p50": 0, "p95": 0,
+            "jitter_ms": 0, "loss_rate": 100, "min_latency": 0, "max_latency": 0,
+            "samples": 0, "success": False,
+            "error": "；".join(errors) or "测速已取消",
+        }
 
-        samples = []
-        sent = count
-        if IS_WINDOWS:
-            total_timeout = max(6, int(count * (timeout_ms / 1000.0) + 3))
-            result = smart_run(
-                ["ping", "-n", str(count), "-w", str(timeout_ms), host],
-                timeout=total_timeout)
-            samples = parse_ping_times(result.stdout or "")
-        else:
-            for _ in range(count):
-                if self._cancel.is_set():
-                    break
-                try:
-                    start = time.perf_counter()
-                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s.settimeout(timeout_ms / 1000)
-                    s.connect((host, 80))
-                    s.close()
-                    samples.append((time.perf_counter() - start) * 1000)
-                except Exception:
-                    pass
-                time.sleep(0.05)
-
-        if not samples:
-            return self._empty_ping_result(host)
-
-        avg = sum(samples) / len(samples)
-        jitter = sum(abs(b - a) for a, b in zip(samples, samples[1:])) / max(len(samples) - 1, 1)
-        loss_rate = round((sent - len(samples)) / sent * 100, 1) if sent else 100
+    @staticmethod
+    def _latency_result(host, method, stats):
         return {
             "host": host,
-            "avg_latency": round(avg, 1),
-            "jitter_ms": round(jitter, 1),
-            "min_latency": round(min(samples), 1),
-            "max_latency": round(max(samples), 1),
-            "loss_rate": max(0.0, loss_rate),
-            "samples": len(samples),
+            "method": method,
+            "avg_latency": stats.mean,
+            "p50": stats.p50,
+            "p95": stats.p95,
+            "jitter_ms": stats.jitter,
+            "loss_rate": stats.loss,
+            "min_latency": stats.min,
+            "max_latency": stats.max,
+            "samples": stats.count,
             "success": True,
         }
+
+    def ping_test(self, host="www.baidu.com", count=5, timeout_ms=2000, cancel=None):
+        """ICMP 延迟采样，返回平均/最小/最大/抖动/丢包率（保留旧字段）。"""
+        result = icmp_latency(host, count=count, timeout_ms=timeout_ms,
+                              cancel=cancel or self._cancel)
+        stats = result["stats"]
+        if not result["success"]:
+            return self._empty_ping_result(host)
+        data = self._latency_result(host, "icmp", stats)
+        data["samples"] = stats.count
+        return data
 
     @staticmethod
     def _empty_ping_result(host):
         return {
-            "host": host, "avg_latency": 0, "jitter_ms": 0,
-            "min_latency": 0, "max_latency": 0,
+            "host": host, "method": "icmp", "avg_latency": 0, "p50": 0, "p95": 0,
+            "jitter_ms": 0, "min_latency": 0, "max_latency": 0,
             "loss_rate": 100, "samples": 0, "success": False,
         }
 
@@ -155,227 +156,207 @@ class SpeedTest:
                 results[futs[f]] = f.result()
         return results
 
-    # ---------------- 下载测速（多源 + 预热 + 实时） ----------------
-    def _download_one(self, url, report):
-        """单源下载：预热后累计字节，按节流周期上报实时速度"""
+    # ---------------- 下载测速（多流 + 稳定窗口） ----------------
+    def download_speed_test(self, progress_callback=None, live_callback=None,
+                            duration=None, cancel=None):
+        """多流并发下载，按稳定窗口计算吞吐，实时上报瞬时速度。"""
+        cancel = cancel or self._cancel
+        if cancel.is_set():
+            return {"success": False, "cancelled": True}
+        duration = float(duration or DL_DURATION)
+        meter = ThroughputMeter()
+        start = time.time()
+        deadline = start + duration
+        started_streams = 0
+        growth = list(DL_GROWTH_STEPS)
+
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=DL_MAX_STREAMS) as executor:
+            futures = {}
+
+            def spawn(count):
+                nonlocal started_streams
+                for sid in range(started_streams, min(count, DL_MAX_STREAMS)):
+                    futures[executor.submit(
+                        self._download_stream, sid, deadline, meter, cancel)] = sid
+                started_streams = min(count, DL_MAX_STREAMS)
+
+            spawn(DL_STREAMS)
+            while time.time() < deadline and not cancel.is_set():
+                time.sleep(LIVE_INTERVAL)
+                live = meter.recent_mbps()
+                if live_callback and live > 0:
+                    live_callback(live)
+                if progress_callback:
+                    progress_callback(min(99, int((time.time() - start) / duration * 100)))
+                if growth and time.time() - start >= growth[0]:
+                    growth.pop(0)
+                    spawn(started_streams + 2)
+            concurrent.futures.wait(
+                futures, timeout=max(1.0, deadline - time.time() + 2.0))
+
+        elapsed = max(time.time() - start, 0.1)
+        if meter.total_bytes <= 10240:
+            return {"success": False, "error": DOWNLOAD_FAIL_HINT}
+
+        result = meter.result(window=min(DL_WINDOW, max(duration / 2, 1.0)), ramp=DL_RAMP)
+        mbps = result["mbps"]
+        if mbps <= 0:
+            mbps = meter.total_bytes / elapsed * 8 / (1024 * 1024)
+        if progress_callback:
+            progress_callback(100)
+        return {
+            "speed_bps": mbps * 1024 * 1024 / 8,
+            "speed_kbps": round(mbps * 1024, 1),
+            "speed_mbps": round(mbps, 1),
+            "peak_mbps": round(max(result["peak_mbps"], meter.peak_mbps), 1),
+            "sources": result["streams"] or 1,
+            "streams": result["streams"],
+            "downloaded_kb": round(meter.total_bytes / 1024, 1),
+            "duration_s": round(elapsed, 1),
+            "window_s": result["window"],
+            "method": "stable-window",
+            "success": True,
+        }
+
+    def _download_stream(self, stream_id, deadline, meter, cancel):
+        """一条下载连接：轮换测速源，直到截止时间或全部源失败。"""
+        index = stream_id
+        failures = 0
+        while not cancel.is_set() and time.time() < deadline:
+            url = TEST_URLS[index % len(TEST_URLS)]
+            index += 1
+            got = self._fetch_stream(url, deadline, meter, stream_id, cancel)
+            if got <= 0:
+                failures += 1
+                if failures >= len(TEST_URLS):
+                    break
+                time.sleep(0.2)
+            else:
+                failures = 0
+        return
+
+    def _fetch_stream(self, url, deadline, meter, stream_id, cancel):
+        """流式读取单个 URL，按块记入 meter。返回本次读取字节数。"""
         import http.client
         import urllib.error
         import urllib.request
-        downloaded = 0      # 预热后计入的字节
-        raw = 0             # 收到的全部字节（含预热）
-        cold_start = time.time()
-        start = None
-        last_report = 0.0
-        warmed = False
+
+        got = 0
+        # 单次连接超时不超过剩余时间太多，避免不可达的源拖长整个测速
+        timeout = max(1.5, min(4.0, deadline - time.time() + 0.5))
         try:
             req = urllib.request.Request(url, headers={
                 "User-Agent": "Mozilla/5.0 NetHelper/1.0",
                 "Accept-Encoding": "identity",
             })
-            with urllib.request.urlopen(req, timeout=12) as response:
-                while True:
-                    if self._cancel.is_set():
-                        return None
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                while not cancel.is_set() and time.time() < deadline:
                     chunk = response.read(CHUNK_BYTES)
                     if not chunk:
                         break
-                    now = time.time()
-                    raw += len(chunk)
-                    if not warmed:
-                        # 预热期不计速，等 TCP 窗口建立后再开始计时
-                        if now - cold_start >= GRACE_SECONDS and raw >= GRACE_SKIP_BYTES:
-                            start = now
-                            downloaded = 0
-                            last_report = now
-                            warmed = True
-                        else:
-                            continue
-                    downloaded += len(chunk)
-                    if now - last_report >= LIVE_INTERVAL:
-                        last_report = now
-                        elapsed = now - start
-                        if elapsed > 0:
-                            mbps = (downloaded / elapsed * 8) / (1024 * 1024)
-                            report(mbps)
-                    if downloaded >= MAX_BYTES_PER_SOURCE:
+                    got += len(chunk)
+                    meter.add(time.time(), len(chunk), stream_id)
+                    if got >= DL_SOURCE_CAP:
                         break
-        except (urllib.error.URLError, OSError, socket.timeout, http.client.HTTPException):
+        except (urllib.error.URLError, OSError, socket.timeout,
+                http.client.HTTPException, ValueError):
             pass
+        return got
 
-        if not warmed:
-            # 预热未完成：若已收到足够数据，按起始时间兜底计入，避免浪费有效测量
-            if raw < GRACE_SKIP_BYTES:
-                return None
-        else:
-            raw = downloaded
-        elapsed = time.time() - (start if warmed else cold_start)
-        if elapsed <= 0 or raw <= 0:
-            return None
-        mbps = (raw / elapsed * 8) / (1024 * 1024)
-        report(mbps)
-        return (raw, elapsed, mbps)
-
-    def download_speed_test(self, progress_callback=None, live_callback=None):
-        """并发多源下载：聚合带宽接近真实上限，实时上报瞬时速度"""
-        if self._cancel.is_set():
+    # ---------------- 上传测速（多流 keep-alive POST） ----------------
+    def upload_speed_test(self, progress_callback=None, live_callback=None,
+                          duration=None, cancel=None):
+        """多流并行 POST 固定大小分片，按稳定窗口计算上行带宽。"""
+        cancel = cancel or self._cancel
+        if cancel.is_set():
             return {"success": False, "cancelled": True}
-        lock = threading.Lock()
-        totals = {"downloaded": 0, "time": 0.0, "count": 0}
-        best_live = {"mbps": 0.0}
-        start_main = time.time()
+        duration = float(duration or UL_DURATION)
+        meter = ThroughputMeter()
+        start = time.time()
+        deadline = start + duration
 
-        def report(mbps):
-            with lock:
-                if mbps > best_live["mbps"]:
-                    best_live["mbps"] = mbps
-            if live_callback:
-                live_callback(mbps)
-
-        def _worker(url):
-            return self._download_one(url, report)
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(TEST_URLS)) as executor:
-            futures = {executor.submit(_worker, url): url for url in TEST_URLS}
-            resolved = 0
-            total = len(futures)
-            for future in concurrent.futures.as_completed(futures):
-                resolved += 1
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=UL_STREAMS) as executor:
+            futures = [executor.submit(
+                self._upload_stream, sid, deadline, meter, cancel)
+                for sid in range(UL_STREAMS)]
+            while time.time() < deadline and not cancel.is_set():
+                time.sleep(LIVE_INTERVAL)
+                live = meter.recent_mbps()
+                if live_callback and live > 0:
+                    live_callback(live)
                 if progress_callback:
-                    progress_callback(int(resolved / total * 100))
-                result = future.result()
-                if result:
-                    with lock:
-                        totals["downloaded"] += result[0]
-                        totals["time"] = max(totals["time"], result[1])
-                        totals["count"] += 1
+                    progress_callback(min(99, int((time.time() - start) / duration * 100)))
+            concurrent.futures.wait(
+                futures, timeout=max(1.0, deadline - time.time() + 2.0))
 
-        elapsed = time.time() - start_main
-        if totals["count"] > 0 and totals["downloaded"] > 10240:
-            window = max(totals["time"], 0.3)
-            speed_bps = totals["downloaded"] / window
-            speed_mbps = speed_bps * 8 / (1024 * 1024)
-            return {
-                "speed_bps": speed_bps,
-                "speed_kbps": round(speed_bps / 1024, 1),
-                "speed_mbps": round(speed_mbps, 1),
-                "peak_mbps": round(best_live["mbps"], 1),
-                "sources": totals["count"],
-                "downloaded_kb": round(totals["downloaded"] / 1024, 1),
-                "duration_s": round(elapsed, 1),
-                "success": True
-            }
-        return {"success": False, "error": DOWNLOAD_FAIL_HINT}
+        elapsed = max(time.time() - start, 0.1)
+        if meter.total_bytes <= 10240:
+            return {"success": False, "error": "无法连接到上传测速服务器"}
 
-    # ---------------- 上传测速（多并发 POST） ----------------
-    def _upload_one(self, endpoint, payload, report):
-        """单连接上传：流式发送固定大小 body，计时并累计字节"""
+        result = meter.result(window=min(DL_WINDOW, max(duration / 2, 1.0)), ramp=DL_RAMP)
+        mbps = result["mbps"]
+        if mbps <= 0:
+            mbps = meter.total_bytes / elapsed * 8 / (1024 * 1024)
+        if progress_callback:
+            progress_callback(100)
+        return {
+            "speed_bps": mbps * 1024 * 1024 / 8,
+            "speed_kbps": round(mbps * 1024, 1),
+            "speed_mbps": round(mbps, 1),
+            "peak_mbps": round(meter.peak_mbps, 1),
+            "connections": result["streams"] or 1,
+            "uploaded_kb": round(meter.total_bytes / 1024, 1),
+            "duration_s": round(elapsed, 1),
+            "window_s": result["window"],
+            "method": "stable-window",
+            "success": True,
+        }
+
+    def _upload_stream(self, stream_id, deadline, meter, cancel):
+        """一条上传连接：keep-alive 连续 POST 分片，超时或取消即停。"""
         import http.client
         import urllib.parse
+
+        endpoint = UPLOAD_URLS[stream_id % len(UPLOAD_URLS)]
+        parsed = urllib.parse.urlparse(endpoint)
+        payload = bytes(UL_POST_BYTES)
+        path = parsed.path or "/__up"
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "User-Agent": "Mozilla/5.0 NetHelper/1.0",
+        }
+        sent_total = 0
         conn = None
         try:
-            parsed = urllib.parse.urlparse(endpoint)
-            conn = http.client.HTTPSConnection(parsed.netloc, timeout=15)
-            conn.putrequest("POST", parsed.path or "/__up")
-            conn.putheader("Content-Length", str(payload))
-            conn.putheader("Content-Type", "application/octet-stream")
-            conn.putheader("User-Agent", "Mozilla/5.0 NetHelper/1.0")
-            conn.endheaders()
-
-            start = time.time()
-            sent = 0
-            last_report = 0.0
-            last_sent = 0
-            chunk = bytes(CHUNK_BYTES)
-            while sent < payload:
-                if self._cancel.is_set():
-                    return None
-                if time.time() - start >= UPLOAD_MAX_SECONDS:
+            conn = http.client.HTTPSConnection(parsed.netloc, timeout=8)
+            while (not cancel.is_set() and time.time() < deadline
+                   and sent_total < UL_TOTAL_CAP):
+                conn.request("POST", path, body=payload, headers=headers)
+                resp = conn.getresponse()
+                resp.read()
+                if resp.status >= 400:
                     break
-                n = min(CHUNK_BYTES, payload - sent)
-                conn.send(chunk[:n])
-                sent += n
-                now = time.time()
-                if now - last_report >= LIVE_INTERVAL:
-                    dt = now - last_report
-                    # 用滑动窗口增量算瞬时速率，并跳过连接建立后第 0.35s 内的 TCP 尖峰，
-                    # 避免“send 无网络背压、时间极短”导致的峰值虚高（如误报 500Mbps）。
-                    if dt > 0 and (now - start) >= 0.35:
-                        report((((sent - last_sent) / dt) * 8) / (1024 * 1024))
-                    last_report = now
-                    last_sent = sent
-
-            if self._cancel.is_set():
-                return None
-            resp = conn.getresponse()
-            resp.read()
-            elapsed = time.time() - start
-            if elapsed <= 0 or sent <= 0:
-                return None
-            mbps = (sent / elapsed * 8) / (1024 * 1024)
-            report(mbps)
-            return (sent, elapsed, mbps)
+                sent_total += len(payload)
+                meter.add(time.time(), len(payload), stream_id)
+                if resp.will_close:
+                    conn.close()
+                    conn = http.client.HTTPSConnection(parsed.netloc, timeout=8)
         except (OSError, http.client.HTTPException, socket.timeout):
-            return None
+            pass
         finally:
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:
+                except OSError:
                     pass
-
-    def upload_speed_test(self, progress_callback=None, live_callback=None):
-        """多并发上传：聚合所有连接的上行带宽，实时上报"""
-        if self._cancel.is_set():
-            return {"success": False, "cancelled": True}
-        lock = threading.Lock()
-        totals = {"sent": 0, "time": 0.0, "count": 0}
-        best_live = {"mbps": 0.0}
-        start_main = time.time()
-
-        def report(mbps):
-            with lock:
-                if mbps > best_live["mbps"]:
-                    best_live["mbps"] = mbps
-            if live_callback:
-                live_callback(mbps)
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=UPLOAD_STREAMS) as executor:
-            futures = [executor.submit(
-                self._upload_one, UPLOAD_URLS[i % len(UPLOAD_URLS)], UPLOAD_PAYLOAD, report
-            ) for i in range(UPLOAD_STREAMS)]
-            resolved = 0
-            total = len(futures)
-            for future in concurrent.futures.as_completed(futures):
-                resolved += 1
-                if progress_callback:
-                    progress_callback(int(resolved / total * 100))
-                result = future.result()
-                if result:
-                    with lock:
-                        totals["sent"] += result[0]
-                        totals["time"] = max(totals["time"], result[1])
-                        totals["count"] += 1
-
-        elapsed = time.time() - start_main
-        if totals["count"] > 0 and totals["sent"] > 10240:
-            window = max(totals["time"], 0.3)
-            speed_bps = totals["sent"] / window
-            speed_mbps = speed_bps * 8 / (1024 * 1024)
-            return {
-                "speed_bps": speed_bps,
-                "speed_kbps": round(speed_bps / 1024, 1),
-                "speed_mbps": round(speed_mbps, 1),
-                "peak_mbps": round(best_live["mbps"], 1),
-                "connections": totals["count"],
-                "uploaded_kb": round(totals["sent"] / 1024, 1),
-                "duration_s": round(elapsed, 1),
-                "success": True
-            }
-        return {"success": False, "error": "无法连接到上传测速服务器"}
+        return sent_total
 
     # ---------------- 完整测速 ----------------
     def run_full_test(self, progress_callback=None, status_callback=None,
-                      live_callback=None, uplive_callback=None):
+                      live_callback=None, uplive_callback=None,
+                      duration=None):
         """完整测速：延迟 + 上传 + 下载（支持实时速度回调与中途取消）"""
         self._cancel.clear()
         self.is_running = True
@@ -383,7 +364,8 @@ class SpeedTest:
         try:
             if status_callback:
                 status_callback("正在测试网络延迟...")
-            results["ping"] = self.ping_test()
+            results["ping"] = self.latency_test()
+            results["latency_stats"] = dict(results["ping"])
             if progress_callback:
                 progress_callback(10)
 
@@ -396,25 +378,27 @@ class SpeedTest:
 
             def up_progress(p):
                 if progress_callback:
-                    progress_callback(10 + int(p * 0.2))
+                    progress_callback(10 + int(p * 0.15))
 
             results["upload"] = self.upload_speed_test(up_progress, uplive_callback)
 
             if progress_callback:
-                progress_callback(35)
+                progress_callback(25)
 
             if self._cancel.is_set():
                 results["cancelled"] = True
                 return results
 
             if status_callback:
-                status_callback("正在并发下载测速（多源）...")
+                status_callback("正在并发下载测速（多流）...")
 
             def speed_progress(p):
                 if progress_callback:
-                    progress_callback(35 + int(p * 0.6))
+                    progress_callback(25 + int(p * 0.75))
 
-            results["download"] = self.download_speed_test(speed_progress, live_callback)
+            results["download"] = self.download_speed_test(
+                speed_progress, live_callback,
+                duration=duration and max(3.0, float(duration) * 0.6))
 
             if progress_callback:
                 progress_callback(100)

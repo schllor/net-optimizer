@@ -102,6 +102,7 @@ class SpeedPageMixin:
 
         self.ping_level = QLabel("等待测试")
         self.ping_level.setAlignment(Qt.AlignCenter)
+        self.ping_level.setWordWrap(True)
         self.ping_level.setStyleSheet(f"""
             font-size: 13px;
             color: {Colors.TEXT_LIGHT};
@@ -144,6 +145,7 @@ class SpeedPageMixin:
 
         self.download_level = QLabel("等待测试")
         self.download_level.setAlignment(Qt.AlignCenter)
+        self.download_level.setWordWrap(True)
         self.download_level.setStyleSheet(f"""
             font-size: 13px;
             color: {Colors.TEXT_LIGHT};
@@ -186,6 +188,7 @@ class SpeedPageMixin:
 
         self.upload_level = QLabel("等待测试")
         self.upload_level.setAlignment(Qt.AlignCenter)
+        self.upload_level.setWordWrap(True)
         self.upload_level.setStyleSheet(f"""
             font-size: 13px;
             color: {Colors.TEXT_LIGHT};
@@ -411,7 +414,12 @@ class SpeedPageMixin:
             level_color = LEVEL_COLORS.get(level_key, Colors.TEXT_MAIN)
             jitter = ping_result.get("jitter_ms")
             loss = ping_result.get("loss_rate", 0)
-            detail = level_text
+            method = "网页首字节" if ping_result.get("method") == "http" else "Ping"
+            detail = f"{method}  ·  {level_text}"
+            p50 = ping_result.get("p50")
+            p95 = ping_result.get("p95")
+            if p50 is not None and p95 is not None:
+                detail += f"  ·  P50 {p50}/P95 {p95}ms"
             if jitter is not None:
                 detail += f"  ·  抖动{jitter}ms"
             if loss:
@@ -433,11 +441,11 @@ class SpeedPageMixin:
 
             level_text, level_key, _ = self.speed_test.get_speed_level(speed)
             level_color = LEVEL_COLORS.get(level_key, Colors.TEXT_MAIN)
-            sources = download_result.get("sources")
+            streams = download_result.get("streams") or download_result.get("sources")
             peak = download_result.get("peak_mbps")
             detail = level_text
-            if sources:
-                detail += f"  ·  {sources} 个测速源"
+            if streams:
+                detail += f"  ·  {streams} 路并发"
             if peak is not None:
                 detail += f"  ·  峰值 {peak}Mbps"
             self.download_level.setText(detail)

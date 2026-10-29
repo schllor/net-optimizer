@@ -90,6 +90,36 @@ class DnsTestWorker(QThread):
         self.optimizer.cancel()
 
 
+class DnsApplyWorker(QThread):
+    """设置系统 DNS（管理员 netsh 写操作移出 GUI 线程）"""
+    finished = Signal(bool, str)
+
+    def __init__(self, primary, secondary="", parent=None):
+        super().__init__(parent)
+        self.optimizer = DNSOptimizer()
+        self.primary = primary
+        self.secondary = secondary
+
+    def run(self):
+        try:
+            ok, message = self.optimizer.set_dns(self.primary, self.secondary)
+        except Exception as e:
+            ok, message = False, f"设置失败: {e}"
+        self.finished.emit(ok, message)
+
+
+class DnsRestoreWorker(QThread):
+    """恢复为自动获取 DNS（DHCP）"""
+    finished = Signal(bool, str)
+
+    def run(self):
+        try:
+            ok, message = DNSOptimizer().restore_dhcp()
+        except Exception as e:
+            ok, message = False, f"恢复失败: {e}"
+        self.finished.emit(ok, message)
+
+
 class WifiCheckWorker(QThread):
     """Wi-Fi检测工作线程"""
     finished = Signal(dict)

@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 import core.theme as theme
 from ui.common import Colors
 from ui.widgets import LatencyBarWidget
-from ui.workers import DnsTestWorker
+from ui.workers import DnsApplyWorker, DnsRestoreWorker, DnsTestWorker
 
 
 class DnsPageMixin:
@@ -51,6 +51,15 @@ class DnsPageMixin:
         info_text_layout.addWidget(self.current_dns_label)
 
         info_layout.addLayout(info_text_layout, 1)
+
+        self.dns_restore_btn = QPushButton("恢复自动获取")
+        self.dns_restore_btn.setFixedHeight(32)
+        self.dns_restore_btn.setCursor(Qt.PointingHandCursor)
+        self.dns_restore_btn.setStyleSheet(theme.secondary_button())
+        self.dns_restore_btn.setToolTip("清除手动设置的 DNS，恢复为路由器自动下发")
+        self.dns_restore_btn.clicked.connect(self._restore_dhcp)
+        info_layout.addWidget(self.dns_restore_btn)
+
         layout.addWidget(info_card)
 
         # 测试按钮
@@ -124,7 +133,8 @@ class DnsPageMixin:
         header_layout.setContentsMargins(10, 5, 10, 5)
         header_layout.setSpacing(0)
 
-        headers = [("排名", 46), ("DNS名称", 96), ("DNS地址", 150), ("延迟", 70), ("地区", 52), ("延迟对比", 0)]
+        headers = [("排名", 46), ("DNS名称", 96), ("DNS地址", 140),
+                   ("P50", 60), ("P95", 60), ("地区", 52), ("延迟对比", 0)]
         for text, width in headers:
             label = QLabel(text)
             label.setStyleSheet(f"""
@@ -229,9 +239,12 @@ class DnsPageMixin:
         # 推荐最佳DNS
         best_dns, advice = self.dns_optimizer.get_best_dns(results)
         if best_dns:
+            p50 = best_dns.get("p50", best_dns.get("latency"))
+            p95 = best_dns.get("p95", best_dns.get("latency"))
+            doh = " · DoH 可用" if best_dns.get("doh_ok") else ""
             self.dns_recommend_text.setText(
                 f"推荐使用: {best_dns['name']} ({best_dns['ip']})\n"
-                f"延迟: {best_dns['latency']}ms | {advice}"
+                f"P50 {p50}ms · P95 {p95}ms{doh} | {advice}"
             )
             self.dns_recommend_text.setStyleSheet(f"""
                 font-size: 14px;
@@ -280,6 +293,7 @@ class DnsPageMixin:
                 }}
             """)
             self._dns_best_ip = best_dns["ip"]
+            self._dns_apply_btn = apply_btn
             apply_btn.clicked.connect(self._apply_best_dns)
             self.dns_list_layout.addWidget(apply_btn)
 
@@ -339,12 +353,12 @@ class DnsPageMixin:
             color: {Colors.TEXT_SECONDARY};
             font-family: Consolas, Monaco, monospace;
         """)
-        ip_label.setFixedWidth(150)
+        ip_label.setFixedWidth(140)
         item_layout.addWidget(ip_label)
 
-        # 延迟
+        # 延迟（P50 / P95）
         if dns.get("success"):
-            latency = dns["latency"]
+            latency = dns.get("p50", dns["latency"])
             latency_text = f"{latency}ms"
             if latency < 30:
                 latency_color = Colors.SUCCESS
@@ -352,9 +366,21 @@ class DnsPageMixin:
                 latency_color = Colors.WARNING
             else:
                 latency_color = Colors.ERROR
+            p95 = dns.get("p95", latency)
+            p95_text = f"{p95}ms"
+            p95_color = (Colors.SUCCESS if p95 < 30 else
+                         Colors.WARNING if p95 < 100 else Colors.ERROR)
         else:
             latency_text = "不可用"
             latency_color = Colors.ERROR
+            p95_text = "--"
+            p95_color = Colors.ERROR
+
+        detail = (f"P50 {latency_text} · P95 {p95_text} · "
+                  f"抖动 {dns.get('jitter_ms', '--')}ms · "
+                  f"超时 {dns.get('timeout_rate', '--')}%")
+        if not dns.get("success") and dns.get("reachable"):
+            detail += "（可连通，但无法正常解析）"
 
         latency_label = QLabel(latency_text)
         latency_label.setStyleSheet(f"""
@@ -362,8 +388,18 @@ class DnsPageMixin:
             color: {latency_color};
             font-weight: bold;
         """)
-        latency_label.setFixedWidth(70)
+        latency_label.setFixedWidth(60)
+        latency_label.setToolTip(detail)
         item_layout.addWidget(latency_label)
+
+        p95_label = QLabel(p95_text)
+        p95_label.setStyleSheet(f"""
+            font-size: 12px;
+            color: {p95_color};
+        """)
+        p95_label.setFixedWidth(60)
+        p95_label.setToolTip(detail)
+        item_layout.addWidget(p95_label)
 
         # 地区
         region = dns.get("region", "")
@@ -387,7 +423,7 @@ class DnsPageMixin:
         self.dns_list_layout.addWidget(item_frame)
 
     def _apply_best_dns(self):
-        """一键应用最优DNS"""
+        """一键应用最优DNS（写入操作在后台线程执行）"""
         dns_ip = getattr(self, "_dns_best_ip", None)
         if not dns_ip:
             return
@@ -404,12 +440,48 @@ class DnsPageMixin:
             return
 
         self._set_status("正在设置DNS...")
+        if getattr(self, "_dns_apply_btn", None) is not None:
+            self._dns_apply_btn.setEnabled(False)
+        worker = DnsApplyWorker(dns_ip)
+        worker.finished.connect(self._on_dns_set_finished)
+        self._dns_action_worker = worker
+        self._start_worker(worker)
 
-        success, message = self.dns_optimizer.set_dns(dns_ip)
+    def _on_dns_set_finished(self, success, message):
+        """DNS 写入结束：提示结果并刷新当前 DNS"""
+        if getattr(self, "_dns_apply_btn", None) is not None:
+            self._dns_apply_btn.setEnabled(True)
         if success:
             QMessageBox.information(self, "设置成功", message)
             self._load_current_dns()
         else:
             QMessageBox.warning(self, "设置失败", message)
+        self._set_status("就绪")
 
+    def _restore_dhcp(self):
+        """恢复为自动获取 DNS（后台执行）"""
+        reply = QMessageBox.question(
+            self, "恢复自动获取DNS",
+            "将把所有活动网卡的 DNS 恢复为「自动获取（DHCP）」，\n"
+            "也就是由路由器重新下发 DNS。\n\n是否继续？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self._set_status("正在恢复自动获取DNS...")
+        self.dns_restore_btn.setEnabled(False)
+        worker = DnsRestoreWorker()
+        worker.finished.connect(self._on_dns_restore_finished)
+        self._dns_action_worker = worker
+        self._start_worker(worker)
+
+    def _on_dns_restore_finished(self, success, message):
+        """恢复 DHCP 结束"""
+        self.dns_restore_btn.setEnabled(True)
+        if success:
+            QMessageBox.information(self, "恢复成功", message)
+            self._load_current_dns()
+        else:
+            QMessageBox.warning(self, "恢复失败", message)
         self._set_status("就绪")

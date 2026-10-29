@@ -106,25 +106,47 @@ def _sockaddr_to_ip(address):
     return None
 
 
+def _query_buffer():
+    """调用 GetAdaptersAddresses 并返回缓冲区；失败返回 None。"""
+    dll = load_dll("iphlpapi")
+    size = wintypes.ULONG(15 * 1024)
+    flags = (GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST
+             | GAA_FLAG_SKIP_DNS_SUFFIX)
+    for _ in range(3):
+        buf = ctypes.create_string_buffer(size.value)
+        ret = dll.GetAdaptersAddresses(
+            AF_UNSPEC, flags, None, buf, ctypes.byref(size))
+        if ret == ERROR_BUFFER_OVERFLOW:
+            continue
+        if ret != 0:
+            return None
+        return buf
+    return None
+
+
 def get_dns_servers():
     """返回活动网卡配置的 DNS 列表（去重保序）；失败返回 None。"""
     if not native_enabled():
         return None
     try:
-        dll = load_dll("iphlpapi")
-        size = wintypes.ULONG(15 * 1024)
-        flags = (GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST
-                 | GAA_FLAG_SKIP_DNS_SUFFIX)
-        for _ in range(3):
-            buf = ctypes.create_string_buffer(size.value)
-            ret = dll.GetAdaptersAddresses(
-                AF_UNSPEC, flags, None, buf, ctypes.byref(size))
-            if ret == ERROR_BUFFER_OVERFLOW:
-                continue
-            if ret != 0:
-                return None
-            return _parse_adapters(buf)
+        buf = _query_buffer()
+        return _parse_adapters(buf) if buf is not None else None
+    except (OSError, AttributeError, ValueError):
         return None
+
+
+def get_dns_by_adapter():
+    """返回 [{name, dns}]（仅活动网卡）；失败返回 None。
+
+    用于修改 DNS 前备份每个接口的原配置，失败时可精确回滚。
+    """
+    if not native_enabled():
+        return None
+    try:
+        buf = _query_buffer()
+        if buf is None:
+            return None
+        return _parse_adapter_rows(buf)
     except (OSError, AttributeError, ValueError):
         return None
 
@@ -136,23 +158,39 @@ def _is_noise_dns(ip):
             or lower.startswith(("fe80:", "fec0:")))
 
 
-def _parse_adapters(buffer):
+def _iter_adapters(buffer):
+    """遍历活动网卡，产出 (接口名, DNS 列表)。"""
     adapters = ctypes.cast(buffer, ctypes.POINTER(IP_ADAPTER_ADDRESSES))
-    seen = []
     adapter = adapters
     while adapter:
         node = adapter.contents
         if (node.OperStatus == IF_OPER_STATUS_UP
                 and node.IfType != IF_TYPE_SOFTWARE_LOOPBACK):
+            dns_list = []
             dns_ptr = node.FirstDnsServerAddress
             while dns_ptr:
                 entry = ctypes.cast(
                     dns_ptr,
                     ctypes.POINTER(IP_ADAPTER_DNS_SERVER_ADDRESS)).contents
                 ip = _sockaddr_to_ip(entry.Address)
-                if ip and ip not in seen and not _is_noise_dns(ip):
-                    seen.append(ip)
+                if ip and not _is_noise_dns(ip) and ip not in dns_list:
+                    dns_list.append(ip)
                 dns_ptr = entry.Next
+            name = node.FriendlyName or node.Description or ""
+            yield name, dns_list
         adapter = ctypes.cast(
             node.Next, ctypes.POINTER(IP_ADAPTER_ADDRESSES)) if node.Next else None
+
+
+def _parse_adapters(buffer):
+    seen = []
+    for _name, dns_list in _iter_adapters(buffer):
+        for ip in dns_list:
+            if ip not in seen:
+                seen.append(ip)
     return seen
+
+
+def _parse_adapter_rows(buffer):
+    return [{"name": name, "dns": dns_list}
+            for name, dns_list in _iter_adapters(buffer)]
