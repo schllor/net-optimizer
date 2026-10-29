@@ -1,11 +1,13 @@
 """
-自绘可视化组件 - 信号弧 / 评分环
+自绘可视化组件 - 信号弧 / 评分环 / 顶部彗星进度条
 为 PySide6 提供 HTML 设计稿中的环形与弧段可视化，替代单调的进度条。
 """
 
+import math
+
 from PySide6.QtWidgets import QWidget, QSizePolicy
-from PySide6.QtGui import QPainter, QColor, QPen, QFont
-from PySide6.QtCore import Qt, QRectF
+from PySide6.QtGui import QPainter, QColor, QPen, QFont, QBrush, QLinearGradient
+from PySide6.QtCore import Qt, QRectF, QTimer, QElapsedTimer
 import core.theme as theme
 
 
@@ -176,3 +178,236 @@ class LatencyBarWidget(QWidget):
             painter.drawRoundedRect(QRectF(0, y, bar_w, track_h), track_h / 2.0, track_h / 2.0)
 
         painter.end()
+
+
+class CometProgressBar(QWidget):
+    """顶部细线彗星进度条。
+
+    未知进度时循环扫过（indeterminate），收到真实百分比后平滑推进
+    （determinate）；任务结束时冲到 100% 再淡出。控件本身不含布局，
+    由父控件悬浮定位，避免出现/消失时挤动页面。
+    """
+
+    HEIGHT = 3
+    HOLD_MS = 180.0      # 到达 100% 后的停顿
+    FADE_TAU = 120.0     # 透明度与进度的缓动时间常数
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(self.HEIGHT)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+        self._state = "idle"                 # idle / indeterminate / determinate / finishing / paused
+        self._resume_state = "indeterminate"
+        self._target = 0.0                   # 目标百分比
+        self._display = 0.0                  # 平滑后的显示百分比
+        self._phase = 0.0                    # 不确定态相位 0..1
+        self._opacity = 0.0
+        self._hold_ms = 0.0
+        self._fading_out = False
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._on_tick)
+        self._clock = QElapsedTimer()
+        self.hide()
+
+    # ---------------------------------------------------------------- 公开接口
+    @property
+    def state(self):
+        return self._state
+
+    @property
+    def value(self):
+        return self._display
+
+    def start(self, percent=None):
+        """开始显示；percent 为 None 时进入不确定态。"""
+        self._fading_out = False
+        self._hold_ms = 0.0
+        self._opacity = max(self._opacity, 0.02)
+        if percent is None:
+            self._state = "indeterminate"
+        else:
+            self._state = "determinate"
+            self._target = self._clamp(percent)
+        self.show()
+        self._ensure_timer()
+        self.update()
+
+    def set_progress(self, percent):
+        """更新真实百分比；目标值只增不减，避免多任务交错时回跳。"""
+        value = self._clamp(percent)
+        if self._state in ("idle", "paused", "finishing"):
+            self.start(value)
+            return
+        self._state = "determinate"
+        self._target = max(self._target, value)
+        self._ensure_timer()
+        self.update()
+
+    def finish(self):
+        """任务完成：确定态先补到 100% 再淡出，不确定态直接淡出。"""
+        if self._state == "idle":
+            return
+        if self._state == "paused":
+            self._reset_to_idle()
+            return
+        self._state = "finishing"
+        self._hold_ms = 0.0
+        if self._target <= 0.0:
+            self._fading_out = True
+        else:
+            self._fading_out = False
+            self._target = 100.0
+        self._ensure_timer()
+
+    def pause(self):
+        """暂停显示（保留下载进度），淡出但不重置目标值。"""
+        if self._state in ("idle", "paused"):
+            return
+        self._resume_state = "determinate" if self._state != "indeterminate" else "indeterminate"
+        self._state = "paused"
+        self._fading_out = False
+        self._ensure_timer()
+
+    def resume(self):
+        if self._state != "paused":
+            return
+        self._state = self._resume_state
+        self._fading_out = False
+        self._hold_ms = 0.0
+        self.show()
+        self._ensure_timer()
+        self.update()
+
+    def stop(self):
+        """立即复位并停表（窗口关闭时调用）。"""
+        self._reset_to_idle()
+
+    def advance(self, dt_ms):
+        """推进动画；定时器槽与测试都走这里。"""
+        dt = max(1.0, float(dt_ms))
+        goal = 0.0 if (self._state in ("idle", "paused") or self._fading_out) else 1.0
+        k = 1.0 - math.exp(-dt / self.FADE_TAU)
+        self._opacity += (goal - self._opacity) * k
+        if abs(goal - self._opacity) < 0.02:
+            self._opacity = goal
+
+        if self._state == "indeterminate":
+            self._phase = (self._phase + dt / 1400.0) % 1.0
+        elif self._state in ("determinate", "finishing"):
+            self._display += (self._target - self._display) * k
+            if abs(self._target - self._display) < 0.3:
+                self._display = self._target
+
+        if self._state == "finishing":
+            if self._display >= 99.5:
+                self._hold_ms += dt
+                if self._hold_ms >= self.HOLD_MS:
+                    self._fading_out = True
+        elif self._state == "paused" and self._opacity <= 0.02:
+            self._timer.stop()
+            self.hide()
+            return
+
+        if self._fading_out and self._opacity <= 0.02:
+            self._reset_to_idle()
+            return
+
+        self.update()
+
+    # ---------------------------------------------------------------- 内部实现
+    @staticmethod
+    def _clamp(percent):
+        try:
+            value = float(percent)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, min(100.0, value))
+
+    def _reset_to_idle(self):
+        self._timer.stop()
+        self._state = "idle"
+        self._fading_out = False
+        self._hold_ms = 0.0
+        self._display = 0.0
+        self._target = 0.0
+        self._phase = 0.0
+        self._opacity = 0.0
+        self.hide()
+        self.update()
+
+    def _ensure_timer(self):
+        if self._state == "idle" or not self.isVisible():
+            return
+        if not self._timer.isActive():
+            self._clock.start()
+            self._timer.start()
+
+    def _on_tick(self):
+        if not self._clock.isValid():
+            dt = 16.0
+            self._clock.start()
+        else:
+            dt = float(self._clock.restart())
+        self.advance(dt)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._ensure_timer()
+
+    def hideEvent(self, event):
+        self._timer.stop()
+        super().hideEvent(event)
+
+    def paintEvent(self, event):
+        if self._opacity <= 0.02:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setOpacity(self._opacity)
+
+        w = float(self.width())
+        h = float(self.height())
+        if w <= 2.0:
+            painter.end()
+            return
+
+        head_color = QColor(theme.FOCUS)
+        tail_color = QColor(theme.ACCENT)
+
+        if self._state == "indeterminate":
+            tail = max(48.0, min(w * 0.35, 180.0))
+            eased = 0.5 - 0.5 * math.cos(math.pi * self._phase)
+            head = -tail + (w + tail) * eased
+        else:
+            tail = min(160.0, max(36.0, w * 0.16))
+            head = max(tail * 0.35, w * self._display / 100.0)
+
+        self._draw_comet(painter, head, tail, w, h, head_color, tail_color)
+        painter.end()
+
+    def _draw_comet(self, painter, head, tail, w, h, head_color, tail_color):
+        start = max(0.0, head - tail)
+        length = head - start
+        if length < 1.0:
+            return
+
+        gradient = QLinearGradient(start, 0.0, head, 0.0)
+        faded = QColor(tail_color)
+        faded.setAlpha(0)
+        solid = QColor(tail_color)
+        solid.setAlpha(235)
+        gradient.setColorAt(0.0, faded)
+        gradient.setColorAt(1.0, solid)
+
+        radius = h / 2.0
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(gradient))
+        painter.drawRoundedRect(QRectF(start, 0.0, length, h), radius, radius)
+
+        # 亮色头部：彗星的“核”
+        painter.setBrush(head_color)
+        dot = h + 1.0
+        painter.drawEllipse(QRectF(max(0.0, head - dot / 2.0), (h - dot) / 2.0, dot, dot))

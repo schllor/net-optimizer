@@ -10,12 +10,11 @@ import re
 import socket
 import struct
 import subprocess
-import platform
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .cmd_utils import smart_run
+from .cmd_utils import IS_WINDOWS, smart_run
 
 
 class DNSOptimizer:
@@ -40,7 +39,7 @@ class DNSOptimizer:
     MAX_WORKERS = 8            # 并发测试的 DNS 数量
 
     def __init__(self):
-        self.is_windows = platform.system() == "Windows"
+        self.is_windows = IS_WINDOWS
         self._cancel = threading.Event()
 
     def cancel(self):

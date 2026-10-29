@@ -53,3 +53,25 @@ def test_main_window_creates_and_switches_all_pages(app):
             assert window.current_page_key == key
     finally:
         window.close()
+
+
+def test_dns_current_dns_is_loaded_lazily(app, monkeypatch):
+    """当前 DNS 依赖 ipconfig，构建窗口时不应执行，首次进入 DNS 页才查一次。"""
+    from core.dns_optimizer import DNSOptimizer
+
+    calls = []
+    monkeypatch.setattr(
+        DNSOptimizer, "get_current_dns",
+        lambda self: calls.append(1) or ["1.1.1.1"])
+
+    window = MainWindow()
+    try:
+        assert calls == []
+        window._switch_page("dns")
+        assert calls == [1]
+        assert window.current_dns_label.text() == "1.1.1.1"
+        window._switch_page("home")
+        window._switch_page("dns")
+        assert calls == [1]
+    finally:
+        window.close()

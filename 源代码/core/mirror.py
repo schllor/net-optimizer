@@ -10,8 +10,6 @@
 """
 
 import time
-import urllib.request
-import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 
 USER_AGENT = "Mozilla/5.0 NetHelper/1.0"
@@ -88,6 +86,8 @@ def build_mirror_urls(url):
 
 def _probe_one(url):
     """探测单个候选可用性，返回可用则 (elapsed, status, url)，否则 None"""
+    import urllib.error
+    import urllib.request
     try:
         req = urllib.request.Request(
             url, headers={"User-Agent": USER_AGENT, "Range": PROBE_RANGE})

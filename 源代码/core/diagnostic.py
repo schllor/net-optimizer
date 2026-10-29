@@ -5,13 +5,12 @@
 
 import socket
 import re
-import platform
 import os
 import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .cmd_utils import smart_run
+from .cmd_utils import IS_WINDOWS, smart_run
 from .netinfo import get_local_ip, get_default_gateway
 
 
@@ -20,7 +19,7 @@ class NetworkDiagnostic:
 
     def __init__(self):
         self.results = []  # 诊断结果列表
-        self.is_windows = platform.system() == "Windows"
+        self.is_windows = IS_WINDOWS
 
     @staticmethod
     def _safe_check(name, check_func):

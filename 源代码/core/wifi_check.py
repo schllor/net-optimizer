@@ -4,18 +4,17 @@ Wi-Fi检测模块 - 检测Wi-Fi信号强度和质量
 """
 
 import subprocess
-import platform
 import re
 import os
 
-from .cmd_utils import run_cmd
+from .cmd_utils import IS_WINDOWS, run_cmd
 
 
 class WiFiChecker:
     """Wi-Fi检测器 - 检测Wi-Fi信号强度和质量"""
 
     def __init__(self):
-        self.is_windows = platform.system() == "Windows"
+        self.is_windows = IS_WINDOWS
 
     def get_wifi_info(self):
         """获取当前Wi-Fi连接信息"""

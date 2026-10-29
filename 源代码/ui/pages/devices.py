@@ -95,7 +95,7 @@ class DevicesPageMixin:
         w = DeviceScanWorker()
         w.finished.connect(self._on_devices_scanned)
         self._dev_worker = w
-        w.start()
+        self._start_worker(w)
 
     def _on_devices_scanned(self, devs):
         """设备扫描完成"""

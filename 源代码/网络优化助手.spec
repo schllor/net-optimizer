@@ -27,6 +27,11 @@ a = Analysis(
         'PySide6.QtTest', 'PySide6.QtWebChannel', 'PySide6.QtWebEngineCore',
         'PySide6.QtWebEngineWidgets', 'PySide6.QtWebSockets',
         'PySide6.QtVirtualKeyboard', 'PySide6.QtXml', 'PySide6.QtXmlPatterns',
+        # 标准库中未被引用的重型模块
+        'tkinter', 'unittest', 'pydoc', 'doctest', 'lib2to3', 'test',
+        'distutils', 'setuptools', 'pip', 'wheel', 'pdb', 'cProfile',
+        'pstats', 'turtle', 'turtledemo', 'ensurepip', 'venv', 'xmlrpc',
+        'multiprocessing',
     ],
     noarchive=False,
     optimize=0,
@@ -38,6 +43,47 @@ a.binaries = [
     entry for entry in a.binaries
     if entry[0].lower() not in {"icuuc.dll", "icudt78.dll"}
 ]
+
+# ---------------------------------------------------------------- 体积裁剪
+# PySide6 的 hook 会把整个 PySide6 目录下的 DLL/插件/翻译一并收集，
+# 仅靠上面的模块 excludes 拦不住。本程序是纯 QWidgets 应用（窗口绘制 +
+# 系统命令），下面这些组件从未被加载，按文件名精确剔除：
+#   - opengl32sw.dll（约 20MB）：Qt 的软件 OpenGL 回退，只在 OpenGL 渲染时加载
+#   - Qt6Quick/Qml/Pdf/VirtualKeyboard/Network/Svg：被插件间接带入，代码从未 import
+#   - imageformats / iconengines：程序不加载任何图片或 SVG 资源
+#   - translations：未使用 QTranslator
+#   - qdirect2d：Windows 下统一使用 qwindows 平台插件
+_UNUSED_QT_FILES = {
+    'pyside6\\opengl32sw.dll',
+    'pyside6\\qt6quick.dll', 'pyside6\\qt6quickwidgets.dll',
+    'pyside6\\qt6quickcontrols2.dll', 'pyside6\\qt6quicktemplates2.dll',
+    'pyside6\\qt6qml.dll', 'pyside6\\qt6qmlmodels.dll',
+    'pyside6\\qt6qmlworkerscript.dll', 'pyside6\\qt6qmlcore.dll',
+    'pyside6\\qt6pdf.dll', 'pyside6\\qt6pdfwidgets.dll',
+    'pyside6\\qt6virtualkeyboard.dll',
+    'pyside6\\qt6network.dll', 'pyside6\\qt6svg.dll',
+    'pyside6\\qt6opengl.dll', 'pyside6\\qt6openglwidgets.dll',
+    'pyside6\\plugins\\platforms\\qdirect2d.dll',
+}
+_UNUSED_QT_DIRS = (
+    'pyside6\\plugins\\imageformats\\',
+    'pyside6\\plugins\\iconengines\\',
+    'pyside6\\plugins\\platforminputcontexts\\',
+    'pyside6\\plugins\\networkinformation\\',
+    'pyside6\\plugins\\tls\\',
+    'pyside6\\plugins\\generic\\',
+    'pyside6\\translations\\',
+)
+
+
+def _keep_qt_entry(entry):
+    key = entry[0].replace('/', '\\').lower()
+    return key not in _UNUSED_QT_FILES and not key.startswith(_UNUSED_QT_DIRS)
+
+
+a.binaries = [e for e in a.binaries if _keep_qt_entry(e)]
+a.datas = [e for e in a.datas if _keep_qt_entry(e)]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(

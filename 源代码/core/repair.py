@@ -4,15 +4,14 @@
 """
 
 import subprocess
-import platform
 import os
 
-from .cmd_utils import smart_run, run_cmd_bytes
+from .cmd_utils import IS_WINDOWS, smart_run, run_cmd_bytes
 
 
 def is_admin():
     """检测当前程序是否以管理员权限运行（Windows）"""
-    if platform.system() != "Windows":
+    if not IS_WINDOWS:
         return True
     try:
         import ctypes
@@ -23,7 +22,7 @@ def is_admin():
 
 def relaunch_as_admin():
     """以管理员权限重新启动程序（Windows UAC 提权）"""
-    if platform.system() != "Windows":
+    if not IS_WINDOWS:
         return False
     try:
         import ctypes
@@ -43,7 +42,7 @@ class NetworkRepair:
     """网络修复器 - 自动修复常见网络问题"""
 
     def __init__(self):
-        self.is_windows = platform.system() == "Windows"
+        self.is_windows = IS_WINDOWS
         self.is_admin = is_admin()
         self.logs = []
 

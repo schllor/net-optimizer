@@ -9,11 +9,13 @@
   - 隐藏控制台窗口：GUI 程序调用命令行时不再闪出黑色 cmd 窗口。
 """
 
-import platform
+import sys
 import subprocess
 from types import SimpleNamespace
 
-_IS_WINDOWS = platform.system() == "Windows"
+# 不用 platform.system()：它在 Windows 上首次调用会真的执行一次 `cmd /c ver`，
+# 实测约 38ms，而本模块会在程序启动时被所有 core 模块导入。
+IS_WINDOWS = sys.platform == "win32"
 _CREATE_NO_WINDOW = 0x08000000  # subprocess.CREATE_NO_WINDOW，仅 Windows 有效
 
 
@@ -23,7 +25,7 @@ def subprocess_kwargs():
     打包成窗口程序后，每次调用 ping/ipconfig 都会弹出一个黑色控制台窗口，
     对新手用户非常吓人。统一加上 CREATE_NO_WINDOW 可彻底消除该现象。
     """
-    if _IS_WINDOWS:
+    if IS_WINDOWS:
         return {"creationflags": _CREATE_NO_WINDOW}
     return {}
 

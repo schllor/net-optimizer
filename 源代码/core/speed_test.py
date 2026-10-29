@@ -14,15 +14,12 @@
 import re
 import time
 import socket
-import platform
 import threading
-import http.client
-import urllib.parse
-import urllib.request
-import urllib.error
 import concurrent.futures
 
-from .cmd_utils import smart_run
+from .cmd_utils import IS_WINDOWS, smart_run
+# urllib / http.client 会在导入时连带解析 email 等模块（约 20ms），
+# 这里按需在测速方法内部导入，避免拖慢程序启动。
 
 
 # Windows/Linux ping 回复行中的单次 RTT，例如「时间=12ms」「时间<1ms」「time=12ms」
@@ -99,7 +96,7 @@ class SpeedTest:
 
         samples = []
         sent = count
-        if platform.system() == "Windows":
+        if IS_WINDOWS:
             total_timeout = max(6, int(count * (timeout_ms / 1000.0) + 3))
             result = smart_run(
                 ["ping", "-n", str(count), "-w", str(timeout_ms), host],
@@ -161,6 +158,9 @@ class SpeedTest:
     # ---------------- 下载测速（多源 + 预热 + 实时） ----------------
     def _download_one(self, url, report):
         """单源下载：预热后累计字节，按节流周期上报实时速度"""
+        import http.client
+        import urllib.error
+        import urllib.request
         downloaded = 0      # 预热后计入的字节
         raw = 0             # 收到的全部字节（含预热）
         cold_start = time.time()
@@ -269,6 +269,8 @@ class SpeedTest:
     # ---------------- 上传测速（多并发 POST） ----------------
     def _upload_one(self, endpoint, payload, report):
         """单连接上传：流式发送固定大小 body，计时并累计字节"""
+        import http.client
+        import urllib.parse
         conn = None
         try:
             parsed = urllib.parse.urlparse(endpoint)

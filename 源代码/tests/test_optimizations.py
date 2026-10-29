@@ -7,7 +7,6 @@ import os
 import sys
 import time
 import threading
-from types import SimpleNamespace
 
 import pytest
 
@@ -166,15 +165,12 @@ def test_cache_alias_is_cached_in_memory(tmp_path, monkeypatch):
 
 
 # ---------- 流量采样：计数器回退保护 ----------
-def test_traffic_counter_reset_is_clamped(monkeypatch):
+def test_traffic_counter_reset_is_clamped():
     readings = [
-        SimpleNamespace(bytes_sent=10_000, bytes_recv=20_000),
-        SimpleNamespace(bytes_sent=100, bytes_recv=200),   # 网卡重置，计数回退
+        (10_000, 20_000),
+        (100, 200),   # 网卡重置，计数回退
     ]
-    monkeypatch.setattr(traffic_mod._psutil, "net_io_counters",
-                        lambda: readings.pop(0))
-    monitor = traffic_mod.TrafficMonitor()
-    monitor.enabled = True
+    monitor = traffic_mod.TrafficMonitor(reader=lambda: readings.pop(0))
 
     assert monitor.sample() == (None, None)     # 首次采样只建基线
     up, down = monitor.sample()

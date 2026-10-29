@@ -19,9 +19,7 @@ import time
 import socket
 import random
 import threading
-import urllib.parse
-import urllib.request
-import urllib.error
+# urllib 导入会连带解析 email 等模块（约 20ms），按需在各函数内部导入以免拖慢启动
 
 from .mirror import is_mirrorable, pick_fastest_url   # 国内镜像加速（顶层静态导入，便于打包分析）
 
@@ -60,6 +58,7 @@ def is_private_host(host):
 
 def validate_url(url):
     """校验下载地址：仅 http/https 且非内网地址，返回错误信息（空表示合法）"""
+    import urllib.parse
     if not url or not url.strip():
         return "请先填入下载地址"
     try:
@@ -83,6 +82,7 @@ def sanitize_filename(name):
 
 def guess_filename(url, final_url=""):
     """从 URL 路径中推断文件名"""
+    import urllib.parse
     raw = final_url or url
     p = urllib.parse.urlparse(raw)
     name = os.path.basename(urllib.parse.unquote(p.path or ""))
@@ -153,6 +153,7 @@ class Downloader:
         return appended
 
     def _head_probe(self):
+        import urllib.request
         try:
             req = urllib.request.Request(self.url, method="HEAD",
                                          headers={"User-Agent": USER_AGENT})
@@ -163,6 +164,7 @@ class Downloader:
 
     def _range_probe(self):
         """HEAD 不支持/失败时，用 Range: bytes=0-0 请求一个字节判断是否支持分段"""
+        import urllib.request
         try:
             req = urllib.request.Request(self.url,
                                          headers={"User-Agent": USER_AGENT,
@@ -173,6 +175,7 @@ class Downloader:
             return None
 
     def _info_from_resp(self, resp, ranged=False):
+        import urllib.parse
         length = resp.headers.get("Content-Length")
         accept = (resp.headers.get("Accept-Ranges") or "").lower()
         final_url = resp.geturl() or self.url
@@ -288,6 +291,8 @@ class Downloader:
         return self
 
     def _worker(self, idx, start, end):
+        import urllib.error
+        import urllib.request
         pos = self._chunk_pos[idx]
         try:
             with open(self.filepath, "r+b") as f:
@@ -350,6 +355,7 @@ class Downloader:
 
     def _stream_whole(self, f, resp):
         """单流下载整块内容写入文件（用于服务器不支持 Range 的场景）"""
+        import urllib.error
         pos = 0
         f.seek(0)
         try:

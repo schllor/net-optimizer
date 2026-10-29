@@ -185,11 +185,13 @@ class DnsPageMixin:
 
         layout.addWidget(list_card, 1)
 
-        # 加载当前DNS
-        self._load_current_dns()
+        # 当前DNS留到首次进入本页时再检测：构造页面时同步执行 ipconfig
+        # 会让启动多出约 40ms 的进程开销
+        self._dns_loaded = False
 
     def _load_current_dns(self):
         """加载当前DNS"""
+        self._dns_loaded = True
         dns_list = self.dns_optimizer.get_current_dns()
         dns_text = "、".join(dns_list)
         self.current_dns_label.setText(dns_text)

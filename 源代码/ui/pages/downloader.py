@@ -265,6 +265,7 @@ class DownloaderPageMixin:
         self._dl_worker.finished.connect(self._on_dl_finished)
 
         self._set_dl_controls(True)
+        self._begin_task("download")
         self._prev_done = 0.0
         self._prev_t = time.time()
         self._activity_at = time.time()
@@ -303,6 +304,7 @@ class DownloaderPageMixin:
             self._activity_at = now
 
         if total > 0:
+            self._update_task("download", d.percent)
             self.dl_progress.setValue(int(round(d.percent * 10)))
         else:
             self.dl_progress.setValue(0)
@@ -349,6 +351,7 @@ class DownloaderPageMixin:
 
     def _on_dl_finished(self):
         # 线程已结束，做一次最终状态收尾
+        self._end_task("download")
         d = self._dl
         if self._dl_timer is not None:
             self._dl_timer.stop()
@@ -384,10 +387,12 @@ class DownloaderPageMixin:
             return
         if d.is_paused():
             d.resume()
+            self._resume_task("download")
             self.dl_pause_btn.setText("暂停")
             self._set_status("已继续下载")
         else:
             d.pause()
+            self._pause_task("download")
             self.dl_pause_btn.setText("继续")
             self._set_status("已暂停下载")
 
