@@ -106,6 +106,13 @@ class DiagnosePageMixin:
         self.diag_copy_btn.hide()
         summary_layout.addWidget(self.diag_copy_btn)
 
+        self.diag_export_btn = QPushButton("导出报告")
+        self.diag_export_btn.setCursor(Qt.PointingHandCursor)
+        self.diag_export_btn.setStyleSheet(theme.secondary_button())
+        self.diag_export_btn.clicked.connect(self._export_diagnostic_report)
+        self.diag_export_btn.hide()
+        summary_layout.addWidget(self.diag_export_btn)
+
         layout.addWidget(self.diag_summary_card)
 
         # 详细结果 - 滚动区域
@@ -162,13 +169,14 @@ class DiagnosePageMixin:
         self.diag_summary_icon.setText("·")
         self.diag_summary_text.setText("正在检测网络状态，请稍候...")
         self.diag_copy_btn.hide()
+        self.diag_export_btn.hide()
 
         self._set_status("正在进行网络诊断...")
 
         self.worker = DiagnosticWorker()
         self.worker.progress.connect(self._on_diag_progress)
         self.worker.item_done.connect(self._on_diag_item_done)
-        self.worker.finished.connect(self._on_diag_finished)
+        self.worker.done.connect(self._on_diag_finished)
         self._start_worker(self.worker)
 
     def _build_diag_steps(self):
@@ -227,12 +235,16 @@ class DiagnosePageMixin:
         self.diag_progress_label.setText(f"正在检测: {item_name} ({percent}%)")
 
     def _on_diag_finished(self, results):
-        """诊断完成"""
+        """诊断完成（结果为空表示任务失败或被取消）"""
         self.diag_btn.setEnabled(True)
         self.diag_btn.setText("重新诊断")
         self.diag_progress.hide()
         self.diag_progress_label.hide()
         self._diag_steps_card.hide()
+
+        if not results:
+            self._set_status("诊断未完成，请重试")
+            return
 
         self.diagnostic.results = results
 
@@ -290,6 +302,7 @@ class DiagnosePageMixin:
         self._set_status("诊断完成")
 
         self.diag_copy_btn.show()
+        self.diag_export_btn.show()
         self.cache.save_result("diagnostic", results)
         self._refresh_home_score()
 
@@ -318,6 +331,29 @@ class DiagnosePageMixin:
                 2000, lambda: self.diag_copy_btn.setText("复制报告"))
         except Exception:
             self.logger.exception("复制诊断报告失败")
+
+    def _export_diagnostic_report(self):
+        """把当前诊断结果导出为 Markdown/JSON/TXT 报告。"""
+        results = self.diagnostic.results if self.diagnostic else []
+        if not results:
+            return
+        from core.report import ReportDoc, ReportSection
+
+        summary, _ = self.diagnostic.get_summary()
+        sections = [
+            ReportSection(item.get("name", ""), [item.get("message", "")])
+            for item in results
+        ]
+        doc = ReportDoc(
+            kind="diagnostic",
+            title="网络诊断报告",
+            summary=summary,
+            sections=sections,
+            meta={"版本": f"v{__version__}", "系统": platform.platform()},
+        )
+        if self._export_report_dialog(doc):
+            self.diag_export_btn.setText("已导出")
+            QTimer.singleShot(2000, lambda: self.diag_export_btn.setText("导出报告"))
 
     def _clear_diag_results(self):
         """清空诊断结果"""

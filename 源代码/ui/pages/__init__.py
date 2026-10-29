@@ -9,6 +9,7 @@ from .dns import DnsPageMixin
 from .wifi import WifiPageMixin
 from .downloader import DownloaderPageMixin
 from .history import HistoryPageMixin
+from .settings import SettingsPageMixin
 
 __all__ = [
     "HomePageMixin",
@@ -20,4 +21,5 @@ __all__ = [
     "WifiPageMixin",
     "DownloaderPageMixin",
     "HistoryPageMixin",
+    "SettingsPageMixin",
 ]

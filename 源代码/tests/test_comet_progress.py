@@ -161,11 +161,13 @@ def test_close_stops_animation(window):
 
     assert window.comet_bar.state == "idle"
     assert window.comet_bar.isHidden()
-    assert not window.net_timer.isActive()
+    assert not window.net_sampler.isRunning()
 
 
 class _FakeScanWorker(QObject):
     finished = Signal()
+    done = Signal(object)
+    failed = Signal(str, str)
 
     def __init__(self):
         super().__init__()

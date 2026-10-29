@@ -340,3 +340,31 @@ class WiFiChecker:
         if not advice:
             advice.append("当前Wi-Fi状态良好，无需特别优化")
         return advice
+
+
+def collect_wifi_diagnostics():
+    """汇总网络环境诊断文本，供复制或导出排查。
+
+    内部会执行 netsh/ipconfig（约 1~3 秒），调用方应放到后台线程。
+    """
+    import datetime
+    import platform
+
+    from .version import __version__
+
+    parts = [
+        "【网络优化助手 诊断信息】",
+        f"版本: v{__version__}",
+        f"系统: {platform.platform()}",
+        f"生成时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "==== netsh wlan show interfaces ====",
+        run_cmd(["netsh", "wlan", "show", "interfaces"], timeout=12),
+        "",
+        "==== netsh wlan show drivers ====",
+        run_cmd(["netsh", "wlan", "show", "drivers"], timeout=12),
+        "",
+        "==== 网络配置 (ipconfig /all) ====",
+        run_cmd(["ipconfig", "/all"], timeout=12),
+    ]
+    return "\n".join(parts)

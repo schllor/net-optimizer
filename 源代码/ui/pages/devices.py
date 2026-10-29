@@ -93,15 +93,18 @@ class DevicesPageMixin:
         self.dev_scan_btn.setEnabled(False)
         self.dev_scan_btn.setText("扫描中…")
         w = DeviceScanWorker()
-        w.finished.connect(self._on_devices_scanned)
+        w.done.connect(self._on_devices_scanned)
         self._dev_worker = w
         self._start_worker(w)
 
     def _on_devices_scanned(self, devs):
-        """设备扫描完成"""
-        self._devices = devs
+        """设备扫描完成（结果为空表示任务失败）"""
         self.dev_scan_btn.setEnabled(True)
         self.dev_scan_btn.setText("重新扫描")
+        if devs is None:
+            self._set_status("设备扫描未完成，请重试")
+            return
+        self._devices = devs
         self._refresh_devices_view()
 
     def _refresh_devices_view(self):

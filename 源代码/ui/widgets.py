@@ -205,6 +205,7 @@ class CometProgressBar(QWidget):
         self._opacity = 0.0
         self._hold_ms = 0.0
         self._fading_out = False
+        self._animations = True
 
         self._timer = QTimer(self)
         self._timer.setInterval(16)
@@ -221,8 +222,17 @@ class CometProgressBar(QWidget):
     def value(self):
         return self._display
 
+    def set_animations_enabled(self, enabled):
+        """关闭动画时不再显示顶部流光（任务本身不受影响）。"""
+        self._animations = bool(enabled)
+        if not self._animations:
+            self._reset_to_idle()
+            self.hide()
+
     def start(self, percent=None):
         """开始显示；percent 为 None 时进入不确定态。"""
+        if not self._animations:
+            return
         self._fading_out = False
         self._hold_ms = 0.0
         self._opacity = max(self._opacity, 0.02)

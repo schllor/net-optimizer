@@ -356,7 +356,7 @@ class SpeedTest:
     # ---------------- 完整测速 ----------------
     def run_full_test(self, progress_callback=None, status_callback=None,
                       live_callback=None, uplive_callback=None,
-                      duration=None):
+                      duration=None, upload_duration=None):
         """完整测速：延迟 + 上传 + 下载（支持实时速度回调与中途取消）"""
         self._cancel.clear()
         self.is_running = True
@@ -380,7 +380,8 @@ class SpeedTest:
                 if progress_callback:
                     progress_callback(10 + int(p * 0.15))
 
-            results["upload"] = self.upload_speed_test(up_progress, uplive_callback)
+            results["upload"] = self.upload_speed_test(
+                up_progress, uplive_callback, duration=upload_duration)
 
             if progress_callback:
                 progress_callback(25)
@@ -397,8 +398,7 @@ class SpeedTest:
                     progress_callback(25 + int(p * 0.75))
 
             results["download"] = self.download_speed_test(
-                speed_progress, live_callback,
-                duration=duration and max(3.0, float(duration) * 0.6))
+                speed_progress, live_callback, duration=duration)
 
             if progress_callback:
                 progress_callback(100)

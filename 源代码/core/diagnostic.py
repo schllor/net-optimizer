@@ -30,7 +30,7 @@ class NetworkDiagnostic:
             status, message = "error", f"检测异常: {str(e)}"
         return {"name": name, "status": status, "message": message}
 
-    def run_all_tests(self, progress_callback=None, item_callback=None):
+    def run_all_tests(self, progress_callback=None, item_callback=None, cancel=None):
         """并发运行所有诊断测试，返回结果列表（顺序与测试清单一致）。
 
         各项检测互不依赖，串行执行会让总耗时等于各项超时之和（弱网下可达 20s+）。
@@ -56,6 +56,10 @@ class NetworkDiagnostic:
             }
             completed = 0
             for future in as_completed(future_map):
+                if cancel is not None and cancel.is_set():
+                    for pending in future_map:
+                        pending.cancel()
+                    break
                 index, name = future_map[future]
                 result = future.result()
                 results_by_index[index] = result
@@ -66,7 +70,7 @@ class NetworkDiagnostic:
                 if progress_callback:
                     progress_callback(int(completed / total * 100), name)
 
-        self.results = [results_by_index[i] for i in range(total)]
+        self.results = [results_by_index[i] for i in sorted(results_by_index)]
         return self.results
 
     def check_network_adapter(self):

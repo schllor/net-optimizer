@@ -94,6 +94,7 @@ class ShellMixin:
             ("speed", "⇅", "网速测试"),
             ("downloader", "↓", "下载器"),
             ("history", "≡", "历史记录"),
+            ("settings", "▤", "设置"),
         ]
 
         # 用于标记在哪个导航项之前插入分组标题（分级：总览 → 检测 → 修复优化 → 工具 → 记录）
@@ -102,6 +103,7 @@ class ShellMixin:
             "repair": "修复 · 优化",
             "devices": "工具",
             "history": "记录",
+            "settings": "系统",
         }
 
         for key, icon, text in nav_items:
@@ -180,6 +182,7 @@ class ShellMixin:
         self._create_wifi_page()
         self._create_downloader_page()
         self._create_history_page()
+        self._create_settings_page()
 
         # 将所有页面加入堆栈
         self.pages.addWidget(self.home_page)
@@ -191,6 +194,7 @@ class ShellMixin:
         self.pages.addWidget(self.wifi_page)
         self.pages.addWidget(self.downloader_page)
         self.pages.addWidget(self.history_page)
+        self.pages.addWidget(self.settings_page)
 
         # 底部状态栏：左侧状态，右侧实时上下行网速
         bottom_bar = QFrame()

@@ -8,7 +8,7 @@
 import time
 
 from PySide6.QtWidgets import QMainWindow, QFrame, QMessageBox
-from PySide6.QtCore import QTimer, Qt, QEvent
+from PySide6.QtCore import Qt, QEvent
 
 from core.diagnostic import NetworkDiagnostic
 from core.repair import NetworkRepair, relaunch_as_admin
@@ -18,22 +18,25 @@ from core.wifi_check import WiFiChecker
 from core.cache import CacheManager
 from core.cmd_utils import IS_WINDOWS
 from core.logger import get_logger
+from core.settings import Settings, apply_runtime
 from core.traffic_monitor import TrafficMonitor
 from core.version import __version__
 import core.theme as theme
 from ui.common import Colors
 from ui.shell import ShellMixin
 from ui.titlebar import WindowGrip
+from ui.workers import TrafficSampler
 from ui.pages import (
     HomePageMixin, DiagnosePageMixin, RepairPageMixin, SpeedPageMixin,
     DnsPageMixin, DevicesPageMixin, WifiPageMixin, DownloaderPageMixin,
-    HistoryPageMixin,
+    HistoryPageMixin, SettingsPageMixin,
 )
 
 
 class MainWindow(ShellMixin, HomePageMixin, DiagnosePageMixin, RepairPageMixin,
                   SpeedPageMixin, DnsPageMixin, DevicesPageMixin, WifiPageMixin,
-                  DownloaderPageMixin, HistoryPageMixin, QMainWindow):
+                  DownloaderPageMixin, HistoryPageMixin, SettingsPageMixin,
+                  QMainWindow):
     """主窗口：负责整体布局、页面导航与后台任务的生命周期。"""
 
     def __init__(self):
@@ -48,6 +51,10 @@ class MainWindow(ShellMixin, HomePageMixin, DiagnosePageMixin, RepairPageMixin,
         self.setMinimumSize(1024, 680)
         self.resize(1120, 740)
 
+        # 用户设置：文件缺失/损坏时回退默认值，不影响启动
+        self.settings = Settings()
+        apply_runtime(self.settings)
+
         # 初始化核心模块
         self.diagnostic = NetworkDiagnostic()
         self.repair = NetworkRepair()
@@ -55,13 +62,14 @@ class MainWindow(ShellMixin, HomePageMixin, DiagnosePageMixin, RepairPageMixin,
         self.dns_optimizer = DNSOptimizer()
         self.wifi_checker = WiFiChecker()
         self.cache = CacheManager()
-        self.traffic = TrafficMonitor()
+        self._apply_history_limit()
+        self.traffic = TrafficMonitor(
+            include_vpn=bool(self.settings.get("traffic_include_vpn", False)))
 
-        # 实时网速定时刷新（每秒一次，采集开销极小）
-        self.net_timer = QTimer(self)
-        self.net_timer.setInterval(1000)
-        self.net_timer.timeout.connect(self._update_net_rates)
-        self.net_timer.start()
+        # 实时网速：后台线程每秒采样，避免在 GUI 线程执行 ctypes/IP Helper
+        self.net_sampler = TrafficSampler(self.traffic)
+        self.net_sampler.rates.connect(self._apply_net_rates)
+        self.net_sampler.start()
 
         # 运行日志
         self.logger = get_logger()
@@ -80,6 +88,7 @@ class MainWindow(ShellMixin, HomePageMixin, DiagnosePageMixin, RepairPageMixin,
         self._setup_window_grips()
         self._setup_styles()
         self._normalize_label_backgrounds()
+        self._apply_animation_setting()
 
         # 默认显示首页
         self._switch_page("home")
@@ -92,7 +101,11 @@ class MainWindow(ShellMixin, HomePageMixin, DiagnosePageMixin, RepairPageMixin,
         界面会明显卡顿；现在只清理已结束的引用，任务之间不再互相等待。
         """
         self._workers = [w for w in self._workers if w.isRunning()]
+        # finished 是 QThread 自带的线程结束信号，只用于清理任务台账；
+        # 业务结果统一走 done / failed，避免被 Qt 的同名信号覆盖。
         worker.finished.connect(lambda *args, w=worker: self._on_worker_finished(w))
+        worker.failed.connect(
+            lambda msg, detail, w=worker: self._on_worker_failed(w, msg, detail))
         if hasattr(worker, "progress"):
             worker.progress.connect(
                 lambda *args, w=worker: self._update_task(w, args[0] if args else 0))
@@ -100,6 +113,22 @@ class MainWindow(ShellMixin, HomePageMixin, DiagnosePageMixin, RepairPageMixin,
         self.worker = worker
         self._begin_task(worker)
         worker.start()
+
+
+    def _on_worker_failed(self, worker, message, detail):
+        """后台任务异常：状态栏提示 + 日志记录，不弹模态框打断用户。"""
+        self.logger.error("后台任务失败 %s: %s | %s",
+                          type(worker).__name__, message, detail)
+        if not self._closing:
+            self._set_status(message)
+
+
+    def _apply_history_limit(self):
+        """把设置中的历史上限同步到缓存模块。"""
+        try:
+            self.cache.max_records = max(1, int(self.settings.get("history_limit", 20)))
+        except (TypeError, ValueError):
+            self.cache.max_records = 20
 
 
     def _on_worker_finished(self, worker):
@@ -213,9 +242,11 @@ class MainWindow(ShellMixin, HomePageMixin, DiagnosePageMixin, RepairPageMixin,
 
     def closeEvent(self, event):
         """窗口关闭时确保所有线程安全退出"""
-        # 停止每秒刷新的流量采样定时器
-        if self.net_timer.isActive():
-            self.net_timer.stop()
+        # 停止流量采样线程，避免退出时仍在使用已销毁的监控对象
+        sampler = getattr(self, "net_sampler", None)
+        if sampler is not None:
+            sampler.stop()
+            sampler.wait(1500)
 
         # 停止顶部进度条动画，避免退出时定时器仍在运行
         self._closing = True
@@ -261,6 +292,7 @@ class MainWindow(ShellMixin, HomePageMixin, DiagnosePageMixin, RepairPageMixin,
             "wifi": (self.wifi_page, "Wi-Fi检测", "检测Wi-Fi信号质量，获取优化建议"),
             "downloader": (self.downloader_page, "多线程下载器", "分段并发加速下载网页与文件"),
             "history": (self.history_page, "历史记录", "查看之前的诊断、修复和测速记录"),
+            "settings": (self.settings_page, "设置", "调整测速、历史与探测方式"),
         }
 
         if page_key in page_map:

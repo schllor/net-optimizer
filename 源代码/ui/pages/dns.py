@@ -9,7 +9,8 @@ from PySide6.QtCore import Qt
 import core.theme as theme
 from ui.common import Colors
 from ui.widgets import LatencyBarWidget
-from ui.workers import DnsApplyWorker, DnsRestoreWorker, DnsTestWorker
+from ui.workers import (
+    DnsApplyWorker, DnsCurrentWorker, DnsRestoreWorker, DnsTestWorker)
 
 
 class DnsPageMixin:
@@ -200,11 +201,19 @@ class DnsPageMixin:
         self._dns_loaded = False
 
     def _load_current_dns(self):
-        """加载当前DNS"""
+        """加载当前DNS（ipconfig / 原生查询在后台执行，避免切页卡顿）"""
         self._dns_loaded = True
-        dns_list = self.dns_optimizer.get_current_dns()
-        dns_text = "、".join(dns_list)
-        self.current_dns_label.setText(dns_text)
+        self.current_dns_label.setText("正在读取…")
+        self._dns_current_worker = DnsCurrentWorker()
+        self._dns_current_worker.done.connect(self._on_current_dns)
+        self._start_worker(self._dns_current_worker)
+
+    def _on_current_dns(self, dns_list):
+        """当前DNS读取完成"""
+        if not dns_list:
+            self.current_dns_label.setText("未获取到 DNS（可稍后重新进入本页刷新）")
+            return
+        self.current_dns_label.setText("、".join(dns_list))
 
     def _start_dns_test(self):
         """开始DNS测试"""
@@ -221,7 +230,7 @@ class DnsPageMixin:
 
         self.worker = DnsTestWorker()
         self.worker.progress.connect(self._on_dns_progress)
-        self.worker.finished.connect(self._on_dns_finished)
+        self.worker.done.connect(self._on_dns_finished)
         self._start_worker(self.worker)
 
     def _on_dns_progress(self, percent, name):
@@ -230,11 +239,15 @@ class DnsPageMixin:
         self.dns_progress_label.setText(f"正在测试: {name} ({percent}%)")
 
     def _on_dns_finished(self, results):
-        """DNS测试完成"""
+        """DNS测试完成（结果为空表示任务失败）"""
         self.dns_btn.setEnabled(True)
         self.dns_btn.setText("重新测试")
         self.dns_progress.hide()
         self.dns_progress_label.hide()
+
+        if not results:
+            self._set_status("DNS 测试未完成，请重试")
+            return
 
         # 推荐最佳DNS
         best_dns, advice = self.dns_optimizer.get_best_dns(results)
@@ -443,14 +456,18 @@ class DnsPageMixin:
         if getattr(self, "_dns_apply_btn", None) is not None:
             self._dns_apply_btn.setEnabled(False)
         worker = DnsApplyWorker(dns_ip)
-        worker.finished.connect(self._on_dns_set_finished)
+        worker.done.connect(self._on_dns_set_finished)
         self._dns_action_worker = worker
         self._start_worker(worker)
 
-    def _on_dns_set_finished(self, success, message):
+    def _on_dns_set_finished(self, result):
         """DNS 写入结束：提示结果并刷新当前 DNS"""
         if getattr(self, "_dns_apply_btn", None) is not None:
             self._dns_apply_btn.setEnabled(True)
+        if not result:
+            self._set_status("设置 DNS 未完成，请重试")
+            return
+        success, message = result
         if success:
             QMessageBox.information(self, "设置成功", message)
             self._load_current_dns()
@@ -472,13 +489,17 @@ class DnsPageMixin:
         self._set_status("正在恢复自动获取DNS...")
         self.dns_restore_btn.setEnabled(False)
         worker = DnsRestoreWorker()
-        worker.finished.connect(self._on_dns_restore_finished)
+        worker.done.connect(self._on_dns_restore_finished)
         self._dns_action_worker = worker
         self._start_worker(worker)
 
-    def _on_dns_restore_finished(self, success, message):
+    def _on_dns_restore_finished(self, result):
         """恢复 DHCP 结束"""
         self.dns_restore_btn.setEnabled(True)
+        if not result:
+            self._set_status("恢复自动获取 DNS 未完成，请重试")
+            return
+        success, message = result
         if success:
             QMessageBox.information(self, "恢复成功", message)
             self._load_current_dns()

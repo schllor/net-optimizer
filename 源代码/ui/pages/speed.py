@@ -313,7 +313,7 @@ class SpeedPageMixin:
         self.worker.status.connect(self._on_speed_status)
         self.worker.live.connect(self._on_speed_live)
         self.worker.upline.connect(self._on_speed_uplive)
-        self.worker.finished.connect(self._on_speed_finished)
+        self.worker.done.connect(self._on_speed_finished)
         self._start_worker(self.worker)
 
     def _cancel_speed_test(self):
@@ -364,9 +364,8 @@ class SpeedPageMixin:
             return f"{bps / 1024:.0f} KB/s"
         return f"{bps:.0f} B/s"
 
-    def _update_net_rates(self):
-        """每帧由定时器调用，更新底部实时网速显示（psutil 缺失时给一次性提示）"""
-        up, dn = self.traffic.sample()
+    def _apply_net_rates(self, up, dn):
+        """接收后台采样线程的速率并刷新底部实时网速（psutil 缺失时给一次性提示）"""
         if not self.traffic.enabled:
             if not getattr(self, "_psutil_warned", False):
                 self._psutil_warned = True
@@ -386,12 +385,16 @@ class SpeedPageMixin:
             bdn.setText("↓ " + self._fmt_rate(dn))
 
     def _on_speed_finished(self, results):
-        """测速完成"""
+        """测速完成（结果为空表示任务失败）"""
         self.speed_btn.setEnabled(True)
         self.speed_btn.setText("重新测速")
         self.speed_cancel_btn.hide()
         self.speed_progress.hide()
         self.speed_status_label.hide()
+
+        if not results:
+            self._set_status("测速未完成，请重试")
+            return
 
         if results.get("cancelled"):
             for value_label in (self.ping_value, self.download_value, self.upload_value):

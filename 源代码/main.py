@@ -6,8 +6,9 @@
 import sys
 import os
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
 from ui.main_window import MainWindow
 from core.version import __version__, APP_NAME
 
@@ -50,6 +51,9 @@ def _setup_font(app):
 
 def main():
     """主函数"""
+    # 125%/150% 等非整数缩放下保留真实比例，避免界面文字发虚或被截断
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(__version__)

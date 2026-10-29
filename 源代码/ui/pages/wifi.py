@@ -1,8 +1,6 @@
 """Wi-Fi 检测页面。"""
 
-import datetime
 import os
-import platform
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
@@ -17,7 +15,7 @@ from core.version import __version__
 from core.wifi_check import network_band
 from ui.common import Colors, LEVEL_COLORS
 from ui.widgets import SignalArcWidget
-from ui.workers import WifiCheckWorker, WifiScanWorker
+from ui.workers import WifiCheckWorker, WifiDiagWorker, WifiScanWorker
 
 
 class WifiPageMixin:
@@ -176,7 +174,7 @@ class WifiPageMixin:
         """)
         advice_layout.addWidget(self.wifi_advice_label)
 
-        # 复制诊断信息按钮（未连接/异常时显示，便于跨电脑排查）
+        # 复制/导出诊断信息（未连接/异常时显示，便于跨电脑排查）
         self.wifi_diag_btn = QPushButton("复制诊断信息")
         self.wifi_diag_btn.setCursor(Qt.PointingHandCursor)
         self.wifi_diag_btn.setStyleSheet(f"""
@@ -189,9 +187,21 @@ class WifiPageMixin:
                 background-color: {Colors.PRIMARY_LIGHT};
             }}
         """)
-        self.wifi_diag_btn.clicked.connect(self._copy_diag_info)
-        self.wifi_diag_btn.hide()
-        advice_layout.addWidget(self.wifi_diag_btn)
+        self.wifi_diag_btn.clicked.connect(lambda: self._start_wifi_diag(False))
+
+        self.wifi_export_btn = QPushButton("导出诊断报告")
+        self.wifi_export_btn.setCursor(Qt.PointingHandCursor)
+        self.wifi_export_btn.setStyleSheet(self.wifi_diag_btn.styleSheet())
+        self.wifi_export_btn.clicked.connect(lambda: self._start_wifi_diag(True))
+
+        self.wifi_diag_row = QWidget()
+        _drow = QHBoxLayout(self.wifi_diag_row)
+        _drow.setContentsMargins(0, 0, 0, 0)
+        _drow.setSpacing(10)
+        _drow.addWidget(self.wifi_diag_btn, 1)
+        _drow.addWidget(self.wifi_export_btn, 1)
+        self.wifi_diag_row.hide()
+        advice_layout.addWidget(self.wifi_diag_row)
 
         layout.addWidget(advice_card)
 
@@ -236,7 +246,7 @@ class WifiPageMixin:
         self.wifi_scan_btn.setText("扫描中…")
         self._set_status("正在扫描附近 Wi-Fi...")
         self._wifi_scan_worker = WifiScanWorker()
-        self._wifi_scan_worker.finished.connect(self._on_wifi_scan_finished)
+        self._wifi_scan_worker.done.connect(self._on_wifi_scan_finished)
         self._start_worker(self._wifi_scan_worker)
 
     def _on_wifi_scan_finished(self, result):
@@ -280,7 +290,7 @@ class WifiPageMixin:
         self._set_status("正在检测Wi-Fi...")
 
         self.worker = WifiCheckWorker()
-        self.worker.finished.connect(self._on_wifi_finished)
+        self.worker.done.connect(self._on_wifi_finished)
         self._start_worker(self.worker)
 
     def _on_wifi_finished(self, info):
@@ -321,7 +331,7 @@ class WifiPageMixin:
             error_msg = info.get("error") or "未连接到Wi-Fi网络：请连接Wi-Fi后重新检测"
             self.wifi_advice_label.setText(error_msg)
             self.wifi_advice_label.setStyleSheet(f"font-size: 13px; color: {Colors.ERROR}; line-height: 1.8;")
-            self.wifi_diag_btn.show()
+            self.wifi_diag_row.show()
             self.wifi_warn_bar.hide()
 
             self._set_status("Wi-Fi检测完成（未连接）")
@@ -373,7 +383,7 @@ class WifiPageMixin:
         self.wifi_advice_label.setText(advice_text)
         self.wifi_advice_label.setStyleSheet(f"font-size: 13px; color: {Colors.SUCCESS}; line-height: 1.8;")
         self._update_wifi_warning(info, fallback, advice_list)
-        self.wifi_diag_btn.hide()
+        self.wifi_diag_row.hide()
         self.wifi_diag_btn.setText("复制诊断信息")
 
         self._set_status("Wi-Fi检测完成")
@@ -402,34 +412,33 @@ class WifiPageMixin:
         else:
             self.wifi_warn_bar.hide()
 
-    def _run_diag_cmd(self, cmd):
-        """安全运行命令并返回解码后的文本（逐条自动识别 GBK/UTF-8，禁止抛错）"""
-        from core.cmd_utils import run_cmd
-        return run_cmd(cmd, timeout=12)
+    def _start_wifi_diag(self, export=False):
+        """后台收集诊断信息；export=True 时收集完直接导出报告。"""
+        self._wifi_diag_export = bool(export)
+        self.wifi_diag_btn.setEnabled(False)
+        self.wifi_export_btn.setEnabled(False)
+        self.wifi_diag_btn.setText("正在收集…")
+        self._set_status("正在收集网络诊断信息...")
+        worker = WifiDiagWorker()
+        worker.done.connect(self._on_wifi_diag_done)
+        self._wifi_diag_worker = worker
+        self._start_worker(worker)
 
-    def _gather_wifi_diag(self):
-        """汇总网络环境诊断文本（便于复制后跨电脑排查）"""
-        parts = [
-            "【网络优化助手 诊断信息】",
-            f"版本: v{__version__}",
-            f"系统: {platform.platform()}",
-            f"Python/PyInstaller 目标: {platform.machine()}",
-            f"生成时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            "",
-            "==== netsh wlan show interfaces ====",
-            self._run_diag_cmd(["netsh", "wlan", "show", "interfaces"]),
-            "",
-            "==== netsh wlan show drivers ====",
-            self._run_diag_cmd(["netsh", "wlan", "show", "drivers"]),
-            "",
-            "==== 无线本地信息 (ipconfig /all) ====",
-            self._run_diag_cmd(["ipconfig", "/all"]),
-        ]
-        return "\n".join(parts)
+    def _on_wifi_diag_done(self, diag):
+        """诊断信息收集完成"""
+        export = getattr(self, "_wifi_diag_export", False)
+        self.wifi_diag_btn.setEnabled(True)
+        self.wifi_export_btn.setEnabled(True)
+        self.wifi_diag_btn.setText("复制诊断信息")
+        if not diag:
+            self._set_status("收集诊断信息失败，请重试")
+            return
 
-    def _copy_diag_info(self):
-        """一键复制诊断信息到剪贴板，并另存一份到软件同目录(便于迁移)"""
-        diag = self._gather_wifi_diag()
+        self._last_wifi_diag = diag
+        if export:
+            self._export_wifi_diag(diag)
+            return
+
         try:
             QApplication.clipboard().setText(diag)
             copied = True
@@ -455,3 +464,19 @@ class WifiPageMixin:
             self.wifi_diag_btn.setText("复制失败")
             self._set_status("复制诊断信息失败，请重试")
         QTimer.singleShot(2500, lambda: self.wifi_diag_btn.setText("复制诊断信息"))
+
+    def _export_wifi_diag(self, diag):
+        """把诊断文本导出为报告文件"""
+        from core.report import ReportDoc, ReportSection
+
+        doc = ReportDoc(
+            kind="wifi",
+            title="Wi-Fi 诊断报告",
+            summary="Wi-Fi 状态与网络环境诊断",
+            sections=[ReportSection("诊断信息", diag.splitlines())],
+            meta={"版本": f"v{__version__}"},
+        )
+        saved = self._export_report_dialog(doc)
+        if saved:
+            self.wifi_diag_btn.setText("已导出报告")
+            QTimer.singleShot(2500, lambda: self.wifi_diag_btn.setText("复制诊断信息"))

@@ -18,8 +18,8 @@ class NetworkRepair:
         self.is_admin = is_admin()
         self.logs = []
 
-    def run_all_repairs(self, progress_callback=None, item_callback=None):
-        """运行所有修复操作"""
+    def run_all_repairs(self, progress_callback=None, item_callback=None, cancel=None):
+        """运行所有修复操作（支持在两项之间取消，已执行的结果保留）"""
         self.logs = []
         repairs = [
             ("刷新DNS缓存", self.flush_dns),
@@ -33,6 +33,8 @@ class NetworkRepair:
         results = []
 
         for i, (name, repair_func) in enumerate(repairs):
+            if cancel is not None and cancel.is_set():
+                break
             try:
                 success, message = repair_func()
             except Exception as e:

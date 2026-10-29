@@ -22,12 +22,13 @@ _MAX_RECORDS = 20
 class CacheManager:
     """缓存管理器 - 保存和读取历史操作记录"""
 
-    def __init__(self):
+    def __init__(self, max_records=_MAX_RECORDS):
         self.cache_dir = get_cache_dir()
         self.cache_file = os.path.join(self.cache_dir, "history.json")
         self._lock = threading.RLock()
         self._aliases = None
         self.last_error = ""
+        self.max_records = int(max_records)
         self._ensure_dir()
 
     def _ensure_dir(self):
@@ -87,8 +88,9 @@ class CacheManager:
             }
             data[category].append(entry)
 
-            if len(data[category]) > _MAX_RECORDS:
-                data[category] = data[category][-_MAX_RECORDS:]
+            limit = max(1, int(self.max_records))
+            if len(data[category]) > limit:
+                data[category] = data[category][-limit:]
 
             return self._save_all(data)
 

@@ -188,6 +188,13 @@ class DownloaderPageMixin:
             self.dl_dir_edit.setText(d)
 
     def _default_dir(self):
+        configured = (self.settings.get("download_dir", "") or "").strip()
+        if configured:
+            try:
+                os.makedirs(configured, exist_ok=True)
+                return configured
+            except OSError:
+                pass
         d = os.path.join(get_data_dir(), "downloads")
         try:
             os.makedirs(d, exist_ok=True)
@@ -262,7 +269,7 @@ class DownloaderPageMixin:
 
         self._dl = Downloader(url, save_dir, mirror=self.dl_accel_on.isChecked())   # 并发取 core 内 MAX_WORKERS；国内镜像由 mirror 开关决定
         self._dl_worker = DownloadWorker(self._dl, self)
-        self._dl_worker.finished.connect(self._on_dl_finished)
+        self._dl_worker.done.connect(self._on_dl_worker_done)
 
         self._set_dl_controls(True)
         self._begin_task("download")
@@ -348,6 +355,9 @@ class DownloaderPageMixin:
             if not self.dl_pause_btn.isEnabled():
                 self.dl_pause_btn.setEnabled(True)
                 self.dl_cancel_btn.setEnabled(True)
+
+    def _on_dl_worker_done(self, _result=None):
+        self._on_dl_finished()
 
     def _on_dl_finished(self):
         # 线程已结束，做一次最终状态收尾

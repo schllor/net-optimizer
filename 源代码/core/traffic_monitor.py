@@ -153,6 +153,7 @@ class TrafficMonitor:
     """实时网速采样器：每次 sample() 返回 (上行bytes/s, 下行bytes/s)"""
 
     def __init__(self, reader=None, include_vpn=False):
+        self._include_vpn = bool(include_vpn)
         if reader is not None:
             self._reader = reader
         elif include_vpn and _READER_FACTORY is not None:
@@ -162,6 +163,18 @@ class TrafficMonitor:
         self.enabled = self._reader is not None
         self._prev_bytes = None   # (bytes_sent, bytes_recv)
         self._prev_time = None
+
+    def set_include_vpn(self, include_vpn):
+        """切换是否把 VPN 隧道计入实时网速（下次采样生效）。"""
+        include_vpn = bool(include_vpn)
+        if include_vpn == self._include_vpn:
+            return
+        self._include_vpn = include_vpn
+        if _READER_FACTORY is not None:
+            self._reader = _READER_FACTORY(True) if include_vpn else _READER
+            self.enabled = self._reader is not None
+            self._prev_bytes = None
+            self._prev_time = None
 
     def sample(self):
         """返回 (upload_bps, download_bps)；首次调用或异常返回 (None, None)"""

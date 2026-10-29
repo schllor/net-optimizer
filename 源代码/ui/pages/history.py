@@ -1,12 +1,22 @@
 """历史记录页面。"""
 
+import json
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
-    QScrollArea, QMessageBox,
+    QScrollArea, QMessageBox, QDialog, QPlainTextEdit,
 )
 from PySide6.QtCore import Qt
 
 from ui.common import Colors
+
+_CATEGORY_LABELS = {
+    "diagnostic": "诊断记录",
+    "repair": "修复记录",
+    "speed": "测速记录",
+    "dns": "DNS测试记录",
+    "wifi": "Wi-Fi检测记录",
+}
 
 
 class HistoryPageMixin:
@@ -85,6 +95,26 @@ class HistoryPageMixin:
         log_btn.clicked.connect(self._open_log_dir)
         btn_layout.addWidget(log_btn)
 
+        self.history_toggle_btn = QPushButton("显示全部")
+        self.history_toggle_btn.setFixedHeight(38)
+        self.history_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.history_toggle_btn.setToolTip("展开全部历史记录（条数上限见「设置」页）")
+        self.history_toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.BG_RAISED};
+                color: {Colors.TEXT_MAIN};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 6px;
+                font-size: 13px;
+                padding: 0 20px;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.PRIMARY_LIGHT};
+            }}
+        """)
+        self.history_toggle_btn.clicked.connect(self._toggle_history_all)
+        btn_layout.addWidget(self.history_toggle_btn)
+
         btn_layout.addStretch()
         layout.addWidget(btn_card)
 
@@ -116,6 +146,14 @@ class HistoryPageMixin:
         results_scroll.setWidget(self.history_widget)
         layout.addWidget(results_scroll, 1)
 
+        self._history_show_all = False
+        self._load_history()
+
+    def _toggle_history_all(self):
+        """在「最近 5 条」与「全部记录」之间切换。"""
+        self._history_show_all = not getattr(self, "_history_show_all", False)
+        self.history_toggle_btn.setText(
+            "收起" if self._history_show_all else "显示全部")
         self._load_history()
 
     def _load_history(self):
@@ -134,6 +172,8 @@ class HistoryPageMixin:
             "dns": ("DNS测试记录", Colors.PRIMARY),
             "wifi": ("Wi-Fi检测记录", Colors.PRIMARY),
         }
+        limit = (max(1, int(getattr(self.cache, "max_records", 20)))
+                 if getattr(self, "_history_show_all", False) else 5)
 
         has_records = False
 
@@ -154,8 +194,7 @@ class HistoryPageMixin:
             """)
             self.history_layout.addWidget(cat_label)
 
-            # 最近5条记录
-            for record in records[-5:]:
+            for record in records[-limit:]:
                 self._add_history_item(record, category)
 
         if not has_records:
@@ -183,13 +222,40 @@ class HistoryPageMixin:
         item_layout.setContentsMargins(15, 10, 15, 10)
         item_layout.setSpacing(5)
 
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(8)
+
         # 时间戳
         time_label = QLabel(record.get("timestamp", "未知时间"))
         time_label.setStyleSheet(f"""
             font-size: 12px;
             color: {Colors.TEXT_LIGHT};
         """)
-        item_layout.addWidget(time_label)
+        head.addWidget(time_label)
+        head.addStretch()
+
+        detail_btn = QPushButton("查看详情")
+        detail_btn.setCursor(Qt.PointingHandCursor)
+        detail_btn.setFixedHeight(26)
+        detail_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.BG_CARD};
+                color: {Colors.TEXT_SECONDARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 4px;
+                font-size: 12px;
+                padding: 0 10px;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.PRIMARY_LIGHT};
+                color: {Colors.TEXT_MAIN};
+            }}
+        """)
+        detail_btn.clicked.connect(
+            lambda checked=False, r=record, c=category: self._show_history_detail(r, c))
+        head.addWidget(detail_btn)
+        item_layout.addLayout(head)
 
         # 结果摘要
         result = record.get("result", {})
@@ -204,6 +270,67 @@ class HistoryPageMixin:
         item_layout.addWidget(summary_label)
 
         self.history_layout.addWidget(item_frame)
+
+    def _show_history_detail(self, record, category):
+        """弹出单条历史记录详情，并支持导出为报告。"""
+        from core.report import from_history
+
+        label = _CATEGORY_LABELS.get(category, category)
+        result = record.get("result")
+        if isinstance(result, (dict, list)):
+            body = json.dumps(result, ensure_ascii=False, indent=2)
+        else:
+            body = str(result)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"{label} · 详情")
+        dialog.resize(720, 560)
+        dlg_layout = QVBoxLayout(dialog)
+        dlg_layout.setContentsMargins(16, 16, 16, 16)
+        dlg_layout.setSpacing(10)
+
+        view = QPlainTextEdit()
+        view.setReadOnly(True)
+        view.setPlainText(
+            f"记录类型：{label}\n时间：{record.get('timestamp', '未知时间')}\n\n{body}")
+        dlg_layout.addWidget(view, 1)
+
+        row = QHBoxLayout()
+        row.addStretch()
+        export_btn = QPushButton("导出报告")
+        export_btn.setFixedHeight(34)
+        export_btn.setCursor(Qt.PointingHandCursor)
+        export_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.PRIMARY};
+                color: {Colors.TEXT_ON_ACCENT};
+                border: none; border-radius: 6px;
+                font-size: 13px; font-weight: bold; padding: 0 18px;
+            }}
+            QPushButton:hover {{ background-color: {Colors.PRIMARY_DARK}; }}
+        """)
+        export_btn.clicked.connect(
+            lambda: self._export_report_dialog(from_history(category, record)))
+        row.addWidget(export_btn)
+
+        close_btn = QPushButton("关闭")
+        close_btn.setFixedHeight(34)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.BG_RAISED};
+                color: {Colors.TEXT_MAIN};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 6px;
+                font-size: 13px; padding: 0 18px;
+            }}
+            QPushButton:hover {{ background-color: {Colors.PRIMARY_LIGHT}; }}
+        """)
+        close_btn.clicked.connect(dialog.accept)
+        row.addWidget(close_btn)
+        dlg_layout.addLayout(row)
+
+        dialog.exec()
 
     def _format_history_summary(self, category, result):
         """格式化历史记录摘要"""

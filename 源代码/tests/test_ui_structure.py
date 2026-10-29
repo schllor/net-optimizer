@@ -6,6 +6,7 @@
 
 import os
 import sys
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -19,18 +20,18 @@ from ui.main_window import MainWindow
 from ui.pages import (
     HomePageMixin, DiagnosePageMixin, RepairPageMixin, SpeedPageMixin,
     DnsPageMixin, DevicesPageMixin, WifiPageMixin, DownloaderPageMixin,
-    HistoryPageMixin,
+    HistoryPageMixin, SettingsPageMixin,
 )
 
 PAGE_KEYS = (
     "home", "wifi", "diagnose", "repair", "dns",
-    "devices", "speed", "downloader", "history",
+    "devices", "speed", "downloader", "history", "settings",
 )
 
 MIXINS = (
     HomePageMixin, DiagnosePageMixin, RepairPageMixin, SpeedPageMixin,
     DnsPageMixin, DevicesPageMixin, WifiPageMixin, DownloaderPageMixin,
-    HistoryPageMixin,
+    HistoryPageMixin, SettingsPageMixin,
 )
 
 
@@ -55,6 +56,18 @@ def test_main_window_creates_and_switches_all_pages(app):
         window.close()
 
 
+def _wait_until(app, predicate, timeout=2.0):
+    """离屏测试里推进事件循环，等待后台线程的信号送达主线程。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.01)
+    app.processEvents()
+    return predicate()
+
+
 def test_dns_current_dns_is_loaded_lazily(app, monkeypatch):
     """当前 DNS 依赖 ipconfig，构建窗口时不应执行，首次进入 DNS 页才查一次。"""
     from core.dns_optimizer import DNSOptimizer
@@ -68,10 +81,11 @@ def test_dns_current_dns_is_loaded_lazily(app, monkeypatch):
     try:
         assert calls == []
         window._switch_page("dns")
+        assert _wait_until(app, lambda: window.current_dns_label.text() == "1.1.1.1")
         assert calls == [1]
-        assert window.current_dns_label.text() == "1.1.1.1"
         window._switch_page("home")
         window._switch_page("dns")
+        app.processEvents()
         assert calls == [1]
     finally:
         window.close()

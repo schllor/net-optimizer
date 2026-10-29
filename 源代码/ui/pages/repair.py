@@ -253,7 +253,7 @@ class RepairPageMixin:
         self.worker = RepairWorker()
         self.worker.progress.connect(self._on_repair_progress)
         self.worker.item_done.connect(self._on_repair_item_done)
-        self.worker.finished.connect(self._on_repair_finished)
+        self.worker.done.connect(self._on_repair_finished)
         self._start_worker(self.worker)
 
     def _on_repair_item_done(self, result):
@@ -274,11 +274,15 @@ class RepairPageMixin:
         self.repair_progress_label.setText(f"正在修复: {item_name} ({percent}%)")
 
     def _on_repair_finished(self, results):
-        """修复完成"""
+        """修复完成（结果为空表示任务失败或被取消）"""
         self.repair_btn.setEnabled(True)
         self.repair_btn.setText("重新修复")
         self.repair_progress.hide()
         self.repair_progress_label.hide()
+
+        if not results:
+            self._set_status("修复未完成，请重试")
+            return
 
         summary, status = self.repair.get_summary(results)
         status_icons = {"ok": "√", "warning": "!", "error": "×"}
