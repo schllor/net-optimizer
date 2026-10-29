@@ -100,6 +100,19 @@ class WifiCheckWorker(QThread):
         self.finished.emit(info)
 
 
+class WifiScanWorker(QThread):
+    """附近 Wi-Fi 扫描工作线程（原生 BSS 列表 / netsh 回退）"""
+    finished = Signal(dict)
+
+    def run(self):
+        try:
+            result = WiFiChecker().scan_nearby_wifi()
+        except Exception as e:
+            result = {"success": False, "networks": [], "advice": [],
+                      "error": f"扫描失败: {e}"}
+        self.finished.emit(result)
+
+
 class DeviceScanWorker(QThread):
     """局域网设备扫描工作线程"""
     finished = Signal(list)

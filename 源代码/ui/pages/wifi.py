@@ -6,7 +6,7 @@ import platform
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
-    QApplication,
+    QScrollArea, QApplication,
 )
 from PySide6.QtCore import Qt, QTimer
 
@@ -14,9 +14,10 @@ import core.theme as theme
 from core.paths import get_data_dir
 from core.theme import RADIUS_SMALL
 from core.version import __version__
+from core.wifi_check import network_band
 from ui.common import Colors, LEVEL_COLORS
 from ui.widgets import SignalArcWidget
-from ui.workers import WifiCheckWorker
+from ui.workers import WifiCheckWorker, WifiScanWorker
 
 
 class WifiPageMixin:
@@ -24,8 +25,12 @@ class WifiPageMixin:
 
     def _create_wifi_page(self):
         """创建Wi-Fi检测页面"""
-        self.wifi_page = QWidget()
-        layout = QVBoxLayout(self.wifi_page)
+        self.wifi_page = QScrollArea()
+        self.wifi_page.setWidgetResizable(True)
+        self.wifi_page.setStyleSheet(theme.scroll_area())
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(15)
 
@@ -189,7 +194,83 @@ class WifiPageMixin:
         advice_layout.addWidget(self.wifi_diag_btn)
 
         layout.addWidget(advice_card)
+
+        # 附近网络 / 信道分析（原生 BSS 扫描，失败回退 netsh）
+        scan_card = self._create_card()
+        scan_layout = QVBoxLayout(scan_card)
+        scan_layout.setContentsMargins(20, 15, 20, 15)
+        scan_layout.setSpacing(8)
+
+        scan_head = QHBoxLayout()
+        scan_title = QLabel("附近网络 / 信道分析")
+        scan_title.setStyleSheet(
+            f"font-size: 14px; font-weight: bold; color: {Colors.TEXT_MAIN};")
+        scan_head.addWidget(scan_title)
+        scan_head.addStretch()
+        self.wifi_scan_btn = QPushButton("扫描附近网络")
+        self.wifi_scan_btn.setCursor(Qt.PointingHandCursor)
+        self.wifi_scan_btn.setStyleSheet(theme.secondary_button())
+        self.wifi_scan_btn.clicked.connect(self._start_wifi_scan)
+        scan_head.addWidget(self.wifi_scan_btn)
+        scan_layout.addLayout(scan_head)
+
+        self.wifi_nearby_label = QLabel("点击「扫描附近网络」查看周边 Wi-Fi 与信道占用")
+        self.wifi_nearby_label.setWordWrap(True)
+        self.wifi_nearby_label.setStyleSheet(
+            f"font-size: 12px; color: {Colors.TEXT_SECONDARY}; line-height: 1.9;")
+        scan_layout.addWidget(self.wifi_nearby_label)
+
+        self.wifi_channel_advice_label = QLabel("")
+        self.wifi_channel_advice_label.setWordWrap(True)
+        self.wifi_channel_advice_label.setStyleSheet(
+            f"font-size: 12px; color: {Colors.PRIMARY}; line-height: 1.8;")
+        scan_layout.addWidget(self.wifi_channel_advice_label)
+
+        layout.addWidget(scan_card)
         layout.addStretch()
+        self.wifi_page.setWidget(page)
+
+    def _start_wifi_scan(self):
+        """扫描附近 Wi-Fi（后台线程，避免 netsh 阻塞界面）"""
+        self.wifi_scan_btn.setEnabled(False)
+        self.wifi_scan_btn.setText("扫描中…")
+        self._set_status("正在扫描附近 Wi-Fi...")
+        self._wifi_scan_worker = WifiScanWorker()
+        self._wifi_scan_worker.finished.connect(self._on_wifi_scan_finished)
+        self._start_worker(self._wifi_scan_worker)
+
+    def _on_wifi_scan_finished(self, result):
+        self.wifi_scan_btn.setEnabled(True)
+        self.wifi_scan_btn.setText("重新扫描")
+        if not isinstance(result, dict) or not result.get("success"):
+            error = result.get("error") if isinstance(result, dict) else "扫描失败"
+            self.wifi_nearby_label.setText(error or "扫描失败")
+            self.wifi_nearby_label.setStyleSheet(
+                f"font-size: 12px; color: {Colors.ERROR}; line-height: 1.9;")
+            self.wifi_channel_advice_label.setText("")
+            self._set_status("附近网络扫描未完成")
+            return
+
+        networks = result.get("networks") or []
+        lines = []
+        for net in networks[:8]:
+            mark = "●" if net.get("connected") else "○"
+            channel = net.get("channel")
+            channel_text = (f"{network_band(net)} {channel} 信道"
+                            if channel else "信道未知")
+            auth = net.get("auth") or "未知加密"
+            lines.append(
+                f"{mark} {net.get('ssid', '')}    {net.get('signal', 0)}%"
+                f"    {channel_text}    {auth}")
+        if not lines:
+            lines.append("附近未发现其他 Wi-Fi 网络")
+        self.wifi_nearby_label.setText("\n".join(lines))
+        self.wifi_nearby_label.setStyleSheet(
+            f"font-size: 12px; color: {Colors.TEXT_SECONDARY}; line-height: 1.9;")
+
+        advice = result.get("advice") or []
+        self.wifi_channel_advice_label.setText("\n".join(advice))
+        self._set_status(f"扫描完成：发现 {len(networks)} 个网络")
 
     def _start_wifi_check(self):
         """开始Wi-Fi检测"""

@@ -23,7 +23,39 @@ def _read_psutil():
     return c.bytes_sent, c.bytes_recv
 
 
-def _build_win_reader():
+IF_TYPE_PPP = 23
+IF_TYPE_SOFTWARE_LOOPBACK = 24
+IF_TYPE_TUNNEL = 131
+OPER_STATUS_UP = 1
+
+
+def select_interfaces(rows, include_vpn=False):
+    """从网卡行中选出应计入实时流量的接口并求和。
+
+    rows: [{alias, if_type, tunnel_type, oper_status, hardware, sent, recv}]
+    VPN 场景下隧道接口与物理接口会重复计数，因此存在活动隧道时只汇总隧道；
+    否则汇总已启用、非回环的物理网卡。
+    """
+    active = [r for r in rows if int(r.get("oper_status", 0)) == OPER_STATUS_UP]
+
+    if include_vpn:
+        tunnels = [r for r in active
+                   if int(r.get("if_type", 0)) in (IF_TYPE_PPP, IF_TYPE_TUNNEL)
+                   or int(r.get("tunnel_type", 0)) != 0]
+        if tunnels:
+            return (sum(int(r.get("sent", 0)) for r in tunnels),
+                    sum(int(r.get("recv", 0)) for r in tunnels))
+
+    physical = [r for r in active
+                if r.get("hardware")
+                and int(r.get("if_type", 0)) not in (
+                    IF_TYPE_PPP, IF_TYPE_SOFTWARE_LOOPBACK, IF_TYPE_TUNNEL)
+                and int(r.get("tunnel_type", 0)) == 0]
+    return (sum(int(r.get("sent", 0)) for r in physical),
+            sum(int(r.get("recv", 0)) for r in physical))
+
+
+def _build_win_reader(include_vpn=False):
     """基于 GetIfTable2 的采样函数：只统计物理网卡，避免过滤驱动重复上报计数。"""
     import ctypes
     from ctypes import wintypes
@@ -77,22 +109,28 @@ def _build_win_reader():
         _fields_ = [("NumEntries", ctypes.c_ulong), ("Table", _MibIfRow2 * 1)]
 
     iphlpapi = ctypes.WinDLL("iphlpapi")
-    row_ptr = ctypes.POINTER(_MibIfRow2)
 
     def read():
         table = ctypes.POINTER(_MibIfTable2)()
         if iphlpapi.GetIfTable2(ctypes.byref(table)) != 0:
             return None
         try:
-            rows = ctypes.cast(ctypes.byref(table.contents.Table[0]), row_ptr)
-            sent = recv = 0
+            rows_ptr = ctypes.cast(
+                ctypes.byref(table.contents.Table[0]),
+                ctypes.POINTER(_MibIfRow2))
+            rows = []
             for i in range(table.contents.NumEntries):
-                row = rows[i]
-                if not (row.InterfaceAndOperStatusFlags & 1):   # HardwareInterface=0 的是过滤驱动
-                    continue
-                sent += row.OutOctets
-                recv += row.InOctets
-            return sent, recv
+                row = rows_ptr[i]
+                rows.append({
+                    "alias": row.Alias,
+                    "if_type": int(row.Type),
+                    "tunnel_type": int(row.TunnelType),
+                    "oper_status": int(row.OperStatus),
+                    "hardware": bool(row.InterfaceAndOperStatusFlags & 1),
+                    "sent": int(row.OutOctets),
+                    "recv": int(row.InOctets),
+                })
+            return select_interfaces(rows, include_vpn)
         finally:
             iphlpapi.FreeMibTable(table)
 
@@ -101,18 +139,26 @@ def _build_win_reader():
 
 if sys.platform == "win32":
     try:
-        _READER = _build_win_reader()
+        _READER_FACTORY = _build_win_reader
     except Exception:
-        _READER = _read_psutil if _HAS_PSUTIL else None
+        _READER_FACTORY = None
 else:
-    _READER = _read_psutil if _HAS_PSUTIL else None
+    _READER_FACTORY = None
+
+_READER = (_READER_FACTORY(False) if _READER_FACTORY
+           else (_read_psutil if _HAS_PSUTIL else None))
 
 
 class TrafficMonitor:
     """实时网速采样器：每次 sample() 返回 (上行bytes/s, 下行bytes/s)"""
 
-    def __init__(self, reader=None):
-        self._reader = reader or _READER
+    def __init__(self, reader=None, include_vpn=False):
+        if reader is not None:
+            self._reader = reader
+        elif include_vpn and _READER_FACTORY is not None:
+            self._reader = _READER_FACTORY(True)
+        else:
+            self._reader = _READER
         self.enabled = self._reader is not None
         self._prev_bytes = None   # (bytes_sent, bytes_recv)
         self._prev_time = None

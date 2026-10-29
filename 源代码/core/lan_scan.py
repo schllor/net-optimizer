@@ -55,7 +55,8 @@ def _resolve_name(ip):
         return ""
 
 
-def resolve_hostnames(ips, timeout=_RESOLVE_TIMEOUT, workers=_RESOLVE_WORKERS):
+def resolve_hostnames(ips, timeout=_RESOLVE_TIMEOUT, workers=_RESOLVE_WORKERS,
+                      cancel=None):
     """并发反查多个 IP 的主机名，整体最多等待 timeout 秒。
 
     原实现逐个 `gethostbyaddr`，每台设备都可能触发系统解析超时（弱网下 3~5 秒），
@@ -73,9 +74,10 @@ def resolve_hostnames(ips, timeout=_RESOLVE_TIMEOUT, workers=_RESOLVE_WORKERS):
     lock = threading.Lock()
     cursor = {"index": 0}
     cursor_lock = threading.Lock()
+    stopped = threading.Event()
 
     def worker():
-        while True:
+        while not stopped.is_set():
             with cursor_lock:
                 idx = cursor["index"]
                 if idx >= len(unique):
@@ -96,17 +98,24 @@ def resolve_hostnames(ips, timeout=_RESOLVE_TIMEOUT, workers=_RESOLVE_WORKERS):
 
     deadline = time.monotonic() + max(0.1, timeout)
     for t in threads:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        while t.is_alive():
+            if cancel is not None and cancel.is_set():
+                stopped.set()
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                stopped.set()
+                break
+            t.join(min(0.05, remaining))
+        if stopped.is_set():
             break
-        t.join(remaining)
 
     with lock:
         return dict(names)
 
 
 def parse_arp_devices(text, local_ip=None, resolve_names=True,
-                      resolve_timeout=_RESOLVE_TIMEOUT):
+                      resolve_timeout=_RESOLVE_TIMEOUT, cancel=None):
     """纯解析：从 `arp -a` 输出提取真实设备列表（已过滤组播/广播噪音）。
 
     返回 list[dict]：ip / mac / name / online / self
@@ -134,13 +143,85 @@ def parse_arp_devices(text, local_ip=None, resolve_names=True,
 
     if resolve_names and devices:
         names = resolve_hostnames(
-            [d["ip"] for d in devices], timeout=resolve_timeout)
+            [d["ip"] for d in devices], timeout=resolve_timeout, cancel=cancel)
         for device in devices:
             device["name"] = names.get(device["ip"]) or "未知设备"
     return devices
 
 
-def scan_lan_devices():
-    """扫描局域网设备列表（命令执行层）。返回 list[dict]：ip / mac / name / online / self"""
-    result = smart_run(["arp", "-a"], timeout=6)
-    return parse_arp_devices(result.stdout or "", get_local_ip())
+def parse_native_neighbors(rows, local_ip=None):
+    """把 GetIpNetTable 结果转成设备列表（复用同一套噪音过滤）。"""
+    seen = set()
+    devices = []
+    for row in rows or []:
+        ip = row.get("ip") or ""
+        mac = (row.get("mac") or "").lower()
+        if not ip or ip in seen or is_noise_entry(ip, mac):
+            continue
+        seen.add(ip)
+        devices.append({
+            "ip": ip,
+            "mac": mac,
+            "name": "未知设备",
+            "online": True,          # 原生路径会在扫描时用 SendARP 复核
+            "self": ip == local_ip,
+        })
+    return devices
+
+
+def _same_subnet(ip, local_ip):
+    try:
+        return ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(
+            f"{local_ip}/24", strict=False)
+    except ValueError:
+        return False
+
+
+def scan_lan_devices(use_native=True, cancel=None):
+    """扫描局域网设备列表。返回 list[dict]：ip / mac / name / online / self
+
+    优先 GetIpNetTable + SendARP（语言无关、online 由 ARP 应答确认）；
+    原生 API 不可用时回退 `arp -a` 文本解析。
+    """
+    local_ip = get_local_ip()
+    devices = None
+    if use_native:
+        try:
+            from .winapi_arp import get_neighbors
+            rows = get_neighbors()
+        except Exception:
+            rows = None
+        if rows is not None:
+            devices = parse_native_neighbors(rows, local_ip)
+
+    if devices is None:
+        result = smart_run(["arp", "-a"], timeout=6)
+        return parse_arp_devices(result.stdout or "", local_ip, cancel=cancel)
+
+    if devices:
+        # 主机名反查与 ARP 探测互不依赖，并行执行可把扫描耗时从 ~4.5s 压到 ~2.5s
+        names_holder = {}
+
+        def _resolve():
+            names_holder["names"] = resolve_hostnames(
+                [d["ip"] for d in devices], cancel=cancel)
+
+        resolver = threading.Thread(target=_resolve, daemon=True)
+        resolver.start()
+
+        same_subnet = [d["ip"] for d in devices
+                       if not d["self"] and _same_subnet(d["ip"], local_ip)]
+        if same_subnet and (cancel is None or not cancel.is_set()):
+            from .winapi_arp import probe_online
+            online = probe_online(same_subnet, timeout=2.0, cancel=cancel)
+            for device in devices:
+                if device["ip"] in online:
+                    device["online"] = True
+                elif device["ip"] in same_subnet:
+                    device["online"] = False   # 同网段但 ARP 无应答
+
+        resolver.join(_RESOLVE_TIMEOUT + 0.1)
+        names = names_holder.get("names", {})
+        for device in devices:
+            device["name"] = names.get(device["ip"]) or "未知设备"
+    return devices
