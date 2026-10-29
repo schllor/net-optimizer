@@ -27,6 +27,7 @@ class CacheManager:
         self.cache_file = os.path.join(self.cache_dir, "history.json")
         self._lock = threading.RLock()
         self._aliases = None
+        self.last_error = ""
         self._ensure_dir()
 
     def _ensure_dir(self):
@@ -52,25 +53,29 @@ class CacheManager:
             return self._default_history()
 
     def _write_json(self, path, data):
-        """原子写入 JSON：先写临时文件，再一次性替换，避免文件损坏。"""
+        """原子写入 JSON：先写临时文件，再一次性替换，避免文件损坏。返回是否成功。"""
         tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             os.replace(tmp, path)
-        except (IOError, OSError):
+            self.last_error = ""
+            return True
+        except (IOError, OSError) as e:
+            self.last_error = str(e)
             try:
                 if os.path.exists(tmp):
                     os.remove(tmp)
             except OSError:
                 pass
+            return False
 
     def _save_all(self, data):
-        """保存全部缓存数据"""
-        self._write_json(self.cache_file, data)
+        """保存全部缓存数据，返回是否成功"""
+        return self._write_json(self.cache_file, data)
 
     def save_result(self, category, result):
-        """保存一条操作记录"""
+        """保存一条操作记录，返回是否成功（失败原因见 last_error）。"""
         with self._lock:
             data = self._load_all()
             if category not in data:
@@ -85,7 +90,7 @@ class CacheManager:
             if len(data[category]) > _MAX_RECORDS:
                 data[category] = data[category][-_MAX_RECORDS:]
 
-            self._save_all(data)
+            return self._save_all(data)
 
     def get_history(self, category):
         """获取某个类别的历史记录"""

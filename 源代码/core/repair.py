@@ -6,36 +6,8 @@
 import subprocess
 import os
 
+from .admin import is_admin, relaunch_as_admin
 from .cmd_utils import IS_WINDOWS, smart_run, run_cmd_bytes
-
-
-def is_admin():
-    """检测当前程序是否以管理员权限运行（Windows）"""
-    if not IS_WINDOWS:
-        return True
-    try:
-        import ctypes
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception:
-        return False
-
-
-def relaunch_as_admin():
-    """以管理员权限重新启动程序（Windows UAC 提权）"""
-    if not IS_WINDOWS:
-        return False
-    try:
-        import ctypes
-        import sys
-        exe_path = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
-        # 透传命令行参数，避免提权重启后丢失运行参数
-        params = subprocess.list2cmdline(sys.argv[1:]) if len(sys.argv) > 1 else ""
-        result = ctypes.windll.shell32.ShellExecuteW(
-            None, "runas", exe_path, params, None, 1)
-        # 返回值 > 32 表示提权启动成功
-        return result > 32
-    except Exception:
-        return False
 
 
 class NetworkRepair:

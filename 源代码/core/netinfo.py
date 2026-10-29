@@ -52,18 +52,18 @@ def _same_subnet(ip_a, ip_b):
 
 
 # ---------------------------------------------------------------- 纯解析函数
-def parse_route_table_info(text):
+def parse_route_table_info(text, local_ip=None):
     """从 `route print` 文本解析默认路由，返回 {'gateway','interface','metric'} 或 None。
 
     路由数据行形如：
         0.0.0.0          0.0.0.0     192.0.2.1      192.0.2.208     45
-    即「目标 掩码 网关 接口 跃点数」。仅目标与掩码均为 0.0.0.0 的才是默认路由；
-    存在多条时取跃点数（metric）最小者。表头虽本地化，数据行却是纯数字，
-    因此本函数与系统语言无关。
+    即「目标 掩码 网关 接口 跃点数」。仅目标与掩码均为 0.0.0.0 的才是默认路由。
+    选择规则：优先与本机 IP 同 /24 网段的默认路由（排除 VMware/VirtualBox 虚拟网卡），
+    其余再按跃点数（metric）最小者。表头虽本地化，数据行却是纯数字，与系统语言无关。
     """
     if not text:
         return None
-    best = None
+    candidates = []
     for line in text.splitlines():
         parts = line.split()
         if len(parts) < 5:
@@ -77,14 +77,19 @@ def parse_route_table_info(text):
             metric = int(parts[4])
         except (ValueError, IndexError):
             metric = 9999
-        if best is None or metric < best["metric"]:
-            best = {"gateway": gateway, "interface": interface, "metric": metric}
-    return best
+        candidates.append({"gateway": gateway, "interface": interface, "metric": metric})
+    if not candidates:
+        return None
+    if local_ip:
+        same_subnet = [c for c in candidates if _same_subnet(c["gateway"], local_ip)]
+        if same_subnet:
+            candidates = same_subnet
+    return min(candidates, key=lambda c: c["metric"])
 
 
-def parse_route_table(text):
+def parse_route_table(text, local_ip=None):
     """从 `route print` 文本解析默认网关字符串；无则返回 None。"""
-    info = parse_route_table_info(text)
+    info = parse_route_table_info(text, local_ip)
     return info["gateway"] if info else None
 
 
@@ -144,10 +149,12 @@ def get_default_gateway(local_ip=None):
     """
     # 策略一：路由表
     try:
+        if local_ip is None:
+            local_ip = get_local_ip()
         output = smart_run(["route", "print", "-4"], timeout=8).stdout
-        gateway = parse_route_table(output)
-        if gateway:
-            return gateway
+        info = parse_route_table_info(output, local_ip)
+        if info:
+            return info["gateway"]
     except Exception:
         pass
 

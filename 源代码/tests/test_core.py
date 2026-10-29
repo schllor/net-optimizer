@@ -28,6 +28,14 @@ from core.version import __version__
     ("169.254.1.1", True),
     ("localhost", True),
     ("", True),  # 空主机按私有处理
+    ("0.0.0.0", True),
+    ("100.64.0.1", True),   # 运营商级 NAT 保留段
+    ("::1", True),
+    ("fe80::1", True),
+    ("::ffff:127.0.0.1", True),
+    ("2130706433", True),   # 整型写法 127.0.0.1
+    ("example.local", True),
+    ("[::1]", True),        # URL 中的方括号 IPv6
 ])
 def test_private_hosts_are_blocked(host, expected):
     assert is_private_host(host) is expected

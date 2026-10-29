@@ -113,6 +113,19 @@ def test_parse_route_table_picks_lowest_metric():
     assert parse_route_table(ROUTE_MULTI) == "192.0.2.1"  # metric 25 < 55
 
 
+def test_parse_route_table_prefers_same_subnet_interface():
+    """已知本机 IP 时优先选同 /24 的默认路由，避免误选虚拟网卡。"""
+    assert parse_route_table(ROUTE_MULTI, "192.0.2.208") == "192.0.2.1"
+    # 本机在另一个网段时，即使 metric 更大也应选该网段的网关
+    assert parse_route_table(ROUTE_MULTI, "198.51.100.107") == "198.51.100.1"
+
+
+def test_parse_route_table_info_prefers_same_subnet():
+    info = parse_route_table_info(ROUTE_MULTI, "198.51.100.107")
+    assert info["gateway"] == "198.51.100.1"
+    assert info["interface"] == "198.51.100.107"
+
+
 def test_parse_route_table_skips_onlink():
     assert parse_route_table(ROUTE_ONLINK) is None  # On-link 不是真实网关
 

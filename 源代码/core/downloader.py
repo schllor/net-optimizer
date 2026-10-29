@@ -30,6 +30,7 @@ REQUEST_TIMEOUT = 20            # 单次请求超时（秒）；urllib 不支持
 MAX_RETRY = 3                   # 瞬态网络错误自动重试次数
 RETRY_BASE = 0.5                # 退避基数（秒），指数退避 0.5/1/2
 USER_AGENT = "Mozilla/5.0 NetHelper/1.0"
+IDLE_TIMEOUT = 60               # 连续多少秒没有任何字节增长视为下载停滞
 
 
 class DownloadError(Exception):
@@ -37,20 +38,27 @@ class DownloadError(Exception):
 
 
 def is_private_host(host):
-    """判断主机是否为内网/回环地址（用于防 SSRF）"""
-    host = (host or "").lower().strip("[]")
-    if not host or host in ("localhost",):
+    """判断主机是否为内网/回环/保留地址（用于防 SSRF）。
+
+    使用 ipaddress 判定，覆盖 IPv6、IPv4-mapped、0.0.0.0、100.64/10 等
+    旧实现漏掉的地址段；非 IP 字面量（域名）只有在 localhost/.local 时拒绝。
+    """
+    import ipaddress
+    host = (host or "").strip().lower().strip("[]")
+    if not host:
         return True
-    # 字面量 IP 判断
-    parts = host.split(".")
-    if len(parts) == 4 and all(p.isdigit() for p in parts):
-        nums = [int(p) for p in parts]
-        return (nums[0] == 10
-                or nums[0] == 127
-                or (nums[0] == 192 and nums[1] == 168)
-                or (nums[0] == 172 and 16 <= nums[1] <= 31)
-                or (nums[0] == 169 and nums[1] == 254))
-    return False
+    if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        # 兼容 http://2130706433/ 这类整型 IPv4 写法
+        try:
+            packed = socket.inet_aton(host)
+        except OSError:
+            return False
+        addr = ipaddress.IPv4Address(packed)
+    return not addr.is_global or addr.is_multicast
 
 
 def validate_url(url):
@@ -69,6 +77,34 @@ def validate_url(url):
     if is_private_host(p.hostname):
         return "不支持下载局域网/内网地址"
     return ""
+
+
+_OPENER = None
+
+
+def _build_opener():
+    """构建带重定向校验的 opener：每一跳都必须通过 validate_url。"""
+    global _OPENER
+    if _OPENER is not None:
+        return _OPENER
+    import urllib.error
+    import urllib.request
+
+    class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            err = validate_url(newurl)
+            if err:
+                raise urllib.error.HTTPError(
+                    newurl, code, f"重定向被拒绝：{err}", headers, fp)
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    _OPENER = urllib.request.build_opener(_SafeRedirectHandler)
+    return _OPENER
+
+
+def open_url(req, timeout):
+    """urlopen 的安全替代：跟随重定向时逐跳校验，禁止跳到内网。"""
+    return _build_opener().open(req, timeout=timeout)
 
 
 def sanitize_filename(name):
@@ -154,7 +190,7 @@ class Downloader:
         try:
             req = urllib.request.Request(self.url, method="HEAD",
                                          headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+            with open_url(req, REQUEST_TIMEOUT) as resp:
                 return self._info_from_resp(resp)
         except Exception:
             return None
@@ -166,7 +202,7 @@ class Downloader:
             req = urllib.request.Request(self.url,
                                          headers={"User-Agent": USER_AGENT,
                                                   "Range": "bytes=0-0"})
-            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+            with open_url(req, REQUEST_TIMEOUT) as resp:
                 return self._info_from_resp(resp, ranged=(resp.status == 206))
         except Exception:
             return None
@@ -232,8 +268,12 @@ class Downloader:
             result[i] = min(max(pos, s), e + 1)
         return result
 
-    def start(self):
-        """开始下载（阻塞直至完成/取消/出错）。应放入 QThread 调用。"""
+    def start(self, timeout=None):
+        """开始下载（阻塞直至完成/取消/出错）。应放入 QThread 调用。
+
+        timeout 为可选的整段下载上限（秒），None 表示不限制总时长；
+        另有 IDLE_TIMEOUT 停滞看门狗：长时间无任何字节增长会主动中止并保留续传进度。
+        """
         self._cancel.clear()
         self._pause.set()
         self._fallback = False
@@ -278,8 +318,23 @@ class Downloader:
             self._threads.append(t)
             t.start()
 
-        for t in self._threads:
-            t.join()
+        started = time.monotonic()
+        with self._cond_lock:
+            last_done = self.done_bytes
+        last_progress = started
+        while any(t.is_alive() for t in self._threads):
+            now = time.monotonic()
+            if timeout is not None and now - started > timeout:
+                self._abort_download("下载超时，进度已保存")
+                break
+            with self._cond_lock:
+                done = self.done_bytes
+            if done != last_done:
+                last_done, last_progress = done, now
+            elif now - last_progress > IDLE_TIMEOUT:
+                self._abort_download("下载停滞，进度已保存")
+                break
+            time.sleep(0.2)
 
         self._finish_check()
         # 用户主动取消时立即落盘进度，下次「开始下载」可接着续传
@@ -308,7 +363,7 @@ class Downloader:
                             if self.supports_range:
                                 headers["Range"] = f"bytes={pos}-{end}"
                             req = urllib.request.Request(self.url, headers=headers)
-                            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+                            with open_url(req, REQUEST_TIMEOUT) as resp:
                                 if self.supports_range and resp.status != 206:
                                     # 服务器实际忽略 Range：退化为单流整块，仅由 idx==0 完成
                                     with self._cond_lock:
@@ -420,6 +475,14 @@ class Downloader:
                 pass
 
     # ---------- 控制 ----------
+    def _abort_download(self, message):
+        """看门狗触发：取消下载并记录原因，已写入的进度会落盘供续传。"""
+        self._cancel.set()
+        self._pause.set()
+        with self._cond_lock:
+            if not self.error:
+                self.error = message
+
     def cancel(self):
         self._cancel.set()
         self._pause.set()
