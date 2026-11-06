@@ -314,6 +314,10 @@ class MainWindow(ShellMixin, HomePageMixin, DiagnosePageMixin, RepairPageMixin,
             # 更新导航按钮状态
             for key, btn in self.nav_buttons.items():
                 btn.setStyleSheet(theme.nav_button(active=(key == page_key)))
+            # 中部滚动区里，确保选中项在可视范围内（底部固定入口不在其中）
+            active_btn = self.nav_buttons.get(page_key)
+            if active_btn is not None and self.nav_scroll.widget().isAncestorOf(active_btn):
+                self.nav_scroll.ensureWidgetVisible(active_btn, 0, 8)
 
             self.current_page_key = page_key
 

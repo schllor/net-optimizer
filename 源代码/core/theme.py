@@ -11,6 +11,11 @@ BG_INSET = "#15191c"
 SHADOW_DARK = "#454d52"
 BORDER = "#363d42"
 
+# 侧栏层级：淡分割线、弱化分组标题，条目文字比次级文字再降一档但保持可读。
+SIDEBAR_DIVIDER = "#1d2427"
+SIDEBAR_GROUP_TEXT = "#7f8a92"
+SIDEBAR_ITEM_TEXT = "#b0bac1"
+
 # Cool white is reserved for actions, active states, and progress.
 ACCENT = "#e6edf4"
 ACCENT_DARK = "#c7d3e0"
@@ -100,9 +105,8 @@ def secondary_button(radius=RADIUS_SMALL):
 def nav_button(active=False):
     """侧栏导航项。
 
-    沿用参考设计的「填充圆角块」选中态，取本主题的强调色（冷调白，主题中
-    即用于 active 状态），块内文字用深色 TEXT_ON_ACCENT 保证对比度；
-    未选中为透明底次级灰字，悬停时给一层侧栏浅色底衬。
+    选中态用与侧栏背景对比明显的冷调白实心圆角块，块内文字转为深色；
+    未选中文字比正文低一档（SIDEBAR_ITEM_TEXT），悬停时提亮并给浅色底衬。
     """
     if active:
         return (
@@ -115,7 +119,7 @@ def nav_button(active=False):
         )
     return (
         "QPushButton {"
-        f"color: {TEXT_SECONDARY}; background-color: transparent;"
+        f"color: {SIDEBAR_ITEM_TEXT}; background-color: transparent;"
         "border: none;"
         "text-align: left; padding-left: 12px;"
         "font-size: 14px;"
@@ -123,6 +127,23 @@ def nav_button(active=False):
         "QPushButton:hover {"
         f"color: {TEXT_MAIN}; background-color: {BG_SIDEBAR_HOVER};"
         f"border-radius: {RADIUS_SMALL};"
+        "}"
+    )
+
+
+def upgrade_button():
+    """底部升级入口：用强调色实心块保证在固定底栏中足够显眼。"""
+    return (
+        "QPushButton {"
+        f"color: {TEXT_ON_ACCENT}; background-color: {ACCENT};"
+        f"border: none; border-radius: {RADIUS_SMALL};"
+        "font-size: 13px; font-weight: bold;"
+        "}"
+        "QPushButton:hover {"
+        f"background-color: {ACCENT_DARK};"
+        "}"
+        "QPushButton:pressed {"
+        f"background-color: {ACCENT_LIGHT}; color: {TEXT_MAIN};"
         "}"
     )
 

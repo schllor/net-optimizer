@@ -2,10 +2,10 @@
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QStackedWidget, QFrame, QApplication,
+    QStackedWidget, QFrame, QScrollArea, QApplication,
 )
-from PySide6.QtGui import QColor, QPalette
-from PySide6.QtCore import Qt, QEvent, QRect
+from PySide6.QtGui import QColor, QPalette, QDesktopServices
+from PySide6.QtCore import Qt, QEvent, QRect, QUrl
 
 from core.version import __version__
 import core.theme as theme
@@ -17,6 +17,8 @@ from core.theme import (
 from ui.common import Colors
 from ui.titlebar import TitleBar
 from ui.widgets import CometProgressBar
+
+RELEASES_URL = "https://github.com/schllor/net-optimizer/releases"
 
 
 class ShellMixin:
@@ -46,98 +48,164 @@ class ShellMixin:
 
 
     def _setup_sidebar(self, parent_layout):
-        """设置侧边导航栏（分组标题 + 图标导航项 + 黑色实心圆角选中块）"""
+        """设置侧边导航栏。
+
+        顶部品牌区和底部系统入口固定，中间按使用场景分组的导航可滚动；
+        分组标题、组间距与淡分割线共同划分层级，选中项用高对比色块标出。
+        """
         sidebar = QFrame()
         self.sidebar = sidebar
         sidebar.setFixedWidth(200)
         sidebar.setStyleSheet(f"background-color: {Colors.BG_SIDEBAR};")
         sidebar_layout = QVBoxLayout(sidebar)
-        # 左右留出内边距，让选中态的黑色圆角块不贴边
-        sidebar_layout.setContentsMargins(10, 20, 10, 20)
-        sidebar_layout.setSpacing(4)
+        # 左右留出内边距，让选中态的高亮圆角块不贴边
+        sidebar_layout.setContentsMargins(10, 12, 10, 10)
+        sidebar_layout.setSpacing(0)
 
-        # Logo区域
+        # ---------- 顶部：品牌区（固定） ----------
+        brand = QWidget()
+        brand_layout = QVBoxLayout(brand)
+        brand_layout.setContentsMargins(4, 0, 4, 9)
+        brand_layout.setSpacing(0)
+
         logo_label = QLabel("网络优化助手")
         logo_label.setStyleSheet(f"""
             color: {Colors.TEXT_MAIN};
-            font-size: 18px;
+            font-size: 17px;
             font-weight: bold;
-            padding: 10px 10px 16px 10px;
+            padding: 4px 6px 3px 6px;
         """)
-        sidebar_layout.addWidget(logo_label)
+        brand_layout.addWidget(logo_label)
 
         subtitle = QLabel("新手小白的网络管家")
         subtitle.setStyleSheet(f"""
-            color: {Colors.TEXT_SECONDARY};
-            font-size: 11px;
-            padding: 0px 10px 18px 10px;
-        """)
-        sidebar_layout.addWidget(subtitle)
-
-        # 分隔线
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet(f"background-color: {Colors.BORDER}; max-height: 1px;")
-        sidebar_layout.addWidget(line)
-
-        sidebar_layout.addSpacing(10)
-
-        # 导航按钮（图标 + 文字；图标为 CJK 字体可渲染的几何符号，避免方框字）
-        self.nav_buttons = {}
-        nav_items = [
-            ("home", "⌂", "首页"),
-            ("wifi", "◈", "Wi-Fi检测"),
-            ("diagnose", "◎", "网络诊断"),
-            ("repair", "⊙", "网络修复"),
-            ("dns", "◆", "DNS优化"),
-            ("devices", "▣", "设备管理"),
-            ("speed", "⇅", "网速测试"),
-            ("downloader", "↓", "下载器"),
-            ("history", "≡", "历史记录"),
-            ("settings", "▤", "设置"),
-        ]
-
-        # 用于标记在哪个导航项之前插入分组标题（分级：总览 → 检测 → 修复优化 → 工具 → 记录）
-        group_title = {
-            "wifi": "检测",
-            "repair": "修复 · 优化",
-            "devices": "工具",
-            "history": "记录",
-            "settings": "系统",
-        }
-
-        for key, icon, text in nav_items:
-            if key in group_title:
-                group_label = QLabel(group_title[key])
-                group_label.setStyleSheet(f"""
-                    color: {Colors.TEXT_LIGHT};
-                    font-size: 11px;
-                    font-weight: bold;
-                    padding: 10px 12px 3px 12px;
-                """)
-                sidebar_layout.addWidget(group_label)
-            btn = QPushButton(f"{icon}   {text}")
-            btn.setFixedHeight(40)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setStyleSheet(theme.nav_button(active=False))
-            btn.clicked.connect(lambda checked, k=key: self._switch_page(k))
-            sidebar_layout.addWidget(btn)
-            self.nav_buttons[key] = btn
-
-        self.current_page_key = None
-
-        sidebar_layout.addStretch()
-
-        # 底部版本信息
-        version_label = QLabel(f"v{__version__} · 2026")
-        version_label.setStyleSheet(f"""
             color: {Colors.TEXT_LIGHT};
             font-size: 11px;
-            padding: 10px 10px;
+            padding: 0px 6px;
         """)
-        sidebar_layout.addWidget(version_label)
+        brand_layout.addWidget(subtitle)
+        sidebar_layout.addWidget(brand)
+        sidebar_layout.addWidget(self._sidebar_divider())
 
+        # ---------- 中部：按场景分组的导航（入口过多时滚动） ----------
+        self.nav_buttons = {}
+        # 图标为 CJK 字体可渲染的几何符号，避免方框字
+        groups = (
+            ("总览", (("home", "⌂", "首页"),)),
+            ("检测", (("wifi", "◈", "Wi-Fi检测"),
+                      ("diagnose", "◎", "网络诊断"))),
+            ("修复 · 优化", (("repair", "⊙", "网络修复"),
+                             ("dns", "◆", "DNS优化"))),
+            ("工具", (("devices", "▣", "设备管理"),
+                      ("speed", "⇅", "网速测试"),
+                      ("downloader", "↓", "下载器"))),
+            ("记录", (("history", "≡", "历史记录"),)),
+        )
+
+        nav_scroll = QScrollArea()
+        self.nav_scroll = nav_scroll
+        nav_scroll.setWidgetResizable(True)
+        nav_scroll.setFrameShape(QFrame.NoFrame)
+        nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        nav_scroll.setStyleSheet(f"""
+            QScrollArea {{ border: none; background: transparent; }}
+            QScrollArea > QWidget > QWidget {{ background: transparent; }}
+            QScrollBar:vertical {{
+                width: 5px; background: transparent; margin: 2px 0;
+            }}
+            QScrollBar::handle:vertical {{
+                min-height: 24px; border-radius: 2px;
+                background-color: {Colors.SHADOW_DARK};
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {Colors.BORDER};
+            }}
+            QScrollBar::add-line, QScrollBar::sub-line {{
+                height: 0px; width: 0px;
+            }}
+        """)
+
+        nav_content = QWidget()
+        nav_layout = QVBoxLayout(nav_content)
+        nav_layout.setContentsMargins(0, 4, 0, 4)
+        nav_layout.setSpacing(2)
+
+        for group_index, (title, items) in enumerate(groups):
+            # 组间留白明显大于行间距；组标题自身也留出上方呼吸空间
+            if group_index:
+                nav_layout.addSpacing(9)
+            group_label = QLabel(title)
+            group_label.setStyleSheet(f"""
+                color: {theme.SIDEBAR_GROUP_TEXT};
+                font-size: 11px;
+                font-weight: bold;
+                padding: {2 if group_index == 0 else 6}px 12px 4px 12px;
+            """)
+            nav_layout.addWidget(group_label)
+
+            for key, icon, text in items:
+                nav_layout.addWidget(self._create_nav_button(key, icon, text))
+
+        nav_layout.addStretch()
+        nav_scroll.setWidget(nav_content)
+        sidebar_layout.addWidget(nav_scroll, 1)
+
+        # ---------- 底部：系统入口 + 升级入口（固定） ----------
+        sidebar_layout.addWidget(self._sidebar_divider())
+
+        footer = QWidget()
+        footer_layout = QVBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 7, 0, 0)
+        footer_layout.setSpacing(5)
+
+        footer_layout.addWidget(self._create_nav_button("settings", "▤", "设置"))
+
+        self.upgrade_btn = QPushButton("↑   检查更新")
+        self.upgrade_btn.setFixedHeight(36)
+        self.upgrade_btn.setCursor(Qt.PointingHandCursor)
+        self.upgrade_btn.setToolTip("打开 GitHub Releases 查看新版本")
+        self.upgrade_btn.setStyleSheet(theme.upgrade_button())
+        self.upgrade_btn.clicked.connect(self._open_releases)
+        footer_layout.addWidget(self.upgrade_btn)
+
+        version_label = QLabel(f"v{__version__} · 2026")
+        version_label.setAlignment(Qt.AlignCenter)
+        version_label.setStyleSheet(f"""
+            color: {theme.SIDEBAR_GROUP_TEXT};
+            font-size: 10px;
+            padding: 1px 0 0 0;
+        """)
+        footer_layout.addWidget(version_label)
+        sidebar_layout.addWidget(footer)
+
+        self.current_page_key = None
         parent_layout.addWidget(sidebar)
+
+
+    def _create_nav_button(self, key, icon, text):
+        """创建一个导航项；所有入口统一登记，便于切换页时同步选中态。"""
+        btn = QPushButton(f"{icon}   {text}")
+        btn.setFixedHeight(36)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setStyleSheet(theme.nav_button(active=False))
+        btn.clicked.connect(lambda checked, k=key: self._switch_page(k))
+        self.nav_buttons[key] = btn
+        return btn
+
+
+    def _sidebar_divider(self):
+        """大块之间的淡分割线；只用于顶部/中部/底部三块的交界。"""
+        line = QFrame()
+        line.setFixedHeight(1)
+        line.setStyleSheet(
+            f"background-color: {theme.SIDEBAR_DIVIDER}; border: none;")
+        return line
+
+
+    def _open_releases(self):
+        """在浏览器中打开版本发布页（升级入口）。"""
+        self.logger.info("打开版本发布页")
+        QDesktopServices.openUrl(QUrl(RELEASES_URL))
 
 
     def _setup_content(self, parent_layout):
