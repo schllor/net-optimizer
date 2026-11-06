@@ -238,7 +238,7 @@ class HomePageMixin:
             color: {tile_color};
             background-clip: padding;
         """)
-        layout.addWidget(icon_label)
+        layout.addWidget(icon_label, 0, Qt.AlignTop)
 
         # 文字区域
         text_layout = QVBoxLayout()
@@ -275,7 +275,10 @@ class HomePageMixin:
             font-weight: bold;
             background: transparent;
         """)
-        layout.addWidget(arrow)
+        # 箭头行盒与图标块等高并顶对齐，三者视觉中心一致
+        arrow.setFixedHeight(icon_label.minimumHeight())
+        arrow.setAlignment(Qt.AlignVCenter | Qt.AlignHCenter)
+        layout.addWidget(arrow, 0, Qt.AlignTop)
 
         return card
 

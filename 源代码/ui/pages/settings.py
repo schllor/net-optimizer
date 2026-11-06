@@ -57,6 +57,14 @@ class SettingsPageMixin:
         self.set_history_limit.setSuffix(" 条")
         form.addRow("历史记录保留", self.set_history_limit)
 
+        self.set_dl_conn = QSpinBox()
+        self.set_dl_conn.setRange(1, 16)
+        self.set_dl_conn.setSuffix(" 路")
+        self.set_dl_conn.setToolTip(
+            "下载器最多同时使用的连接数；从 4 路起步，按网速自动增加。\n"
+            "部分站点并发过高会限流（403/429），遇到时可调低。")
+        form.addRow("下载并发连接", self.set_dl_conn)
+
         self.set_animations = QCheckBox("显示顶部流光进度条")
         form.addRow("界面动画", self.set_animations)
 
@@ -126,6 +134,7 @@ class SettingsPageMixin:
         self.set_speed_ul.setValue(int(self.settings.get("speed_ul_seconds", 6)))
         self.set_dns_rounds.setValue(int(self.settings.get("dns_rounds", 3)))
         self.set_history_limit.setValue(int(self.settings.get("history_limit", 20)))
+        self.set_dl_conn.setValue(int(self.settings.get("download_connections", 8)))
         self.set_animations.setChecked(bool(self.settings.get("animations", True)))
         self.set_native_api.setChecked(bool(self.settings.get("native_api", True)))
         self.set_traffic_vpn.setChecked(
@@ -140,6 +149,7 @@ class SettingsPageMixin:
             "speed_ul_seconds": self.set_speed_ul.value(),
             "dns_rounds": self.set_dns_rounds.value(),
             "history_limit": self.set_history_limit.value(),
+            "download_connections": self.set_dl_conn.value(),
             "animations": self.set_animations.isChecked(),
             "native_api": self.set_native_api.isChecked(),
             "traffic_include_vpn": self.set_traffic_vpn.isChecked(),

@@ -117,11 +117,23 @@ class DownloaderPageMixin:
         self.dl_cancel_btn.clicked.connect(self._cancel_download)
         btn_row.addWidget(self.dl_cancel_btn)
 
-        hint = QLabel("小提示：支持断点续传，中断后可重新点击「开始下载」继续；多个分块并发下载会比单线程更快。")
+        self.dl_settings_btn = QPushButton("⚙")
+        self.dl_settings_btn.setFixedSize(42, 42)
+        self.dl_settings_btn.setCursor(Qt.PointingHandCursor)
+        self.dl_settings_btn.setToolTip("下载设置：进入设置页调整最大并发连接数")
+        self.dl_settings_btn.setStyleSheet(f"""
+            QPushButton {{ background-color: {Colors.BG_RAISED}; color: {Colors.TEXT_MAIN};
+                border: none; border-radius: 8px; font-size: 18px; }}
+            QPushButton:hover {{ background-color: {Colors.BORDER}; }}
+        """)
+        self.dl_settings_btn.clicked.connect(lambda: self._switch_page("settings"))
+        btn_row.addWidget(self.dl_settings_btn)
+
+        hint = QLabel("小提示：支持断点续传；默认从 4 路并发起步，按网速自动加到设置里的上限。")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"font-size: 12px; color: {Colors.TEXT_SECONDARY};")
 
-        self.dl_accel_on = QCheckBox("国内镜像加速")
+        self.dl_accel_on = QCheckBox("国内镜像加速（多源并发）")
         self.dl_accel_on.setChecked(True)
         self.dl_accel_on.setCursor(Qt.PointingHandCursor)
         self.dl_accel_on.setToolTip("勾选后，遇到 GitHub 等国外源会自动探测并选择最快的国内镜像；国内直链不受影响")
@@ -267,7 +279,14 @@ class DownloaderPageMixin:
             self.dl_status.setText(f"无法创建保存文件夹：{e}")
             return
 
-        self._dl = Downloader(url, save_dir, mirror=self.dl_accel_on.isChecked())   # 并发取 core 内 MAX_WORKERS；国内镜像由 mirror 开关决定
+        try:
+            conns = int(self.settings.get("download_connections", 8))
+        except (TypeError, ValueError):
+            conns = 8
+        conns = max(1, min(16, conns))
+        self._dl = Downloader(
+            url, save_dir, max_workers=conns,
+            mirror=self.dl_accel_on.isChecked())
         self._dl_worker = DownloadWorker(self._dl, self)
         self._dl_worker.done.connect(self._on_dl_worker_done)
 
@@ -316,7 +335,10 @@ class DownloaderPageMixin:
         else:
             self.dl_progress.setValue(0)
 
-        meta = f"已下载 {self._fmt_size(done)} / {self._fmt_size(total)}   |   {self._fmt_dl_speed(speed)}   |   {d.percent:.1f}%"
+        workers = getattr(d, "active_workers", 0)
+        meta = (f"已下载 {self._fmt_size(done)} / {self._fmt_size(total)}"
+                f"   |   {self._fmt_dl_speed(speed)}   |   {d.percent:.1f}%"
+                f"   |   并发 {workers}/{getattr(d, 'max_conn', 0)} 路")
         self.dl_meta.setText(meta)
 
         if d.completed:

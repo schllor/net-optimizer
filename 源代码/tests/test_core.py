@@ -122,44 +122,145 @@ def test_smart_run_returncode():
     assert "ok" in res.stdout
 
 
-# ---------- 分块与进度逻辑（不触发网络） ----------
-def _make_dl(total, supports_range=True, max_workers=3, tmp_path=None):
+# ---------- 分段与进度逻辑（不触发网络） ----------
+def _make_dl(total, supports_range=True, max_conn=8):
     d = Downloader.__new__(Downloader)  # 跳过 __init__，避免真实 URL
+    import threading
     d.url = "https://example.com/f.zip"
-    d.save_dir = str(tmp_path or ".")
-    d.max_workers = max_workers
+    d.orig_url = d.url
+    d.max_workers = max_conn
+    d.max_conn = max_conn
     d.mirror = False
     d.total_size = total
     d.supports_range = supports_range
     d.done_bytes = 0
-    d._chunks = []
-    d._chunk_pos = {}
+    d._single_mode = False
+    d._segs = []
+    d._lock = threading.RLock()
+    d._wake = threading.Event()
     return d
 
 
-def test_build_chunks_small_file_is_single():
-    d = _make_dl(total=2 * 1024 * 1024)  # 2MB，小于 MIN_SPLIT
-    d._build_chunks()
-    assert len(d._chunks) == 1
+def _assert_contiguous(segs, total):
+    assert segs[0].start == 0
+    assert segs[-1].end == total - 1
+    for a, b in zip(segs, segs[1:]):
+        assert b.start == a.end + 1
 
 
-def test_build_chunks_large_file_splits():
-    d = _make_dl(total=20 * 1024 * 1024, max_workers=3)  # 20MB
-    d._build_chunks()
-    assert len(d._chunks) == 3
-    # 首尾闭合、无缝覆盖
-    starts = [c[0] for c in d._chunks]
-    ends = [c[1] for c in d._chunks]
-    assert starts[0] == 0
-    assert ends[-1] == 20 * 1024 * 1024 - 1
-    for i in range(len(starts) - 1):
-        assert ends[i] + 1 == starts[i + 1]
+def test_init_segments_small_file_is_single():
+    d = _make_dl(total=2 * 1024 * 1024)  # 2MB，小于 MIN_MULTI_SIZE
+    d._init_segments()
+    assert len(d._segs) == 1
+    assert d._single_mode is False  # 仍支持 Range，只是不并行
 
 
-def test_build_chunks_no_range_single():
+def test_init_segments_large_file_starts_four():
+    total = 20 * 1024 * 1024
+    d = _make_dl(total=total, max_conn=8)
+    d._init_segments()
+    assert len(d._segs) == 4  # START_CONNECTIONS
+    _assert_contiguous(d._segs, total)
+
+
+def test_init_segments_respects_max_conn():
+    total = 20 * 1024 * 1024
+    d = _make_dl(total=total, max_conn=3)
+    d._init_segments()
+    assert len(d._segs) == 3
+    _assert_contiguous(d._segs, total)
+
+
+def test_init_segments_no_range_single_mode():
     d = _make_dl(total=10 * 1024 * 1024, supports_range=False)
-    d._build_chunks()
-    assert len(d._chunks) == 1
+    d._init_segments()
+    assert len(d._segs) == 1
+    assert d._single_mode is True
+
+
+def test_split_segment_halves_and_keeps_coverage():
+    total = 8 * 1024 * 1024
+    d = _make_dl(total=total, max_conn=8)
+    d._init_segments()
+    seg = d._segs[0]
+    old_end = seg.end
+    cut = seg.start + (old_end - seg.start + 1) // 2
+    seg.split_at = cut
+    with d._lock:
+        d._apply_split_locked(seg)
+    assert seg.end == cut - 1
+    assert d._segs[-1].start == cut
+    assert d._segs[-1].end == old_end
+    d._segs.sort(key=lambda s: s.start)
+    _assert_contiguous(d._segs, total)
+
+
+def test_split_rejects_tiny_tail():
+    total = 8 * 1024 * 1024
+    d = _make_dl(total=total, max_conn=8)
+    d._init_segments()
+    seg = d._segs[0]
+    seg.split_at = seg.end  # 尾部只剩 1 字节，低于 MIN_SEGMENT
+    before = len(d._segs)
+    with d._lock:
+        d._apply_split_locked(seg)
+    assert len(d._segs) == before
+    assert seg.split_at is None
+
+
+def test_recount_counts_only_written_bytes():
+    d = _make_dl(total=1024 * 1024)
+    d._init_segments()  # 小于 4MB，单段
+    seg = d._segs[0]
+    seg.pos = 400 * 1024
+    d._recount_locked()
+    assert d.done_bytes == 400 * 1024
+    seg.pos = seg.end + 1  # 完成
+    d._recount_locked()
+    assert d.done_bytes == 1024 * 1024
+
+
+def test_resume_state_roundtrip(tmp_path):
+    import threading
+    total = 20 * 1024 * 1024
+    d = _make_dl(total=total)
+    d.filepath = str(tmp_path / "f.bin")
+    d.state_path = d.filepath + ".netmeta.json"
+    d._state_lock = threading.RLock()
+    d._init_segments()
+    d._segs[0].pos = 12345
+    d._save_state()
+
+    d2 = _make_dl(total=total)
+    d2.filepath = d.filepath
+    d2.state_path = d.state_path
+    assert d2._load_resume() is True
+    assert d2.resumed is True
+    assert d2._segs[0].pos == 12345
+    assert d2.done_bytes == 12345
+
+
+def test_resume_rejects_mismatched_total(tmp_path):
+    import json
+    import threading
+    total = 20 * 1024 * 1024
+    d = _make_dl(total=total)
+    d.filepath = str(tmp_path / "f.bin")
+    d.state_path = d.filepath + ".netmeta.json"
+    d._state_lock = threading.RLock()
+    d._init_segments()
+    d._save_state()
+
+    with open(d.state_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    data["total"] = total + 1
+    with open(d.state_path, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+    d2 = _make_dl(total=total)
+    d2.filepath = d.filepath
+    d2.state_path = d.state_path
+    assert d2._load_resume() is False
 
 
 def test_percent_unknown_size_is_zero():

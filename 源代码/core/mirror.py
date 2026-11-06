@@ -5,17 +5,22 @@
 做法（参考 mirror-cn 等开源方案）：
   1. 判断 URL 是否属于可镜像的国外托管 host；
   2. 是则生成候选镜像地址（前缀模式 + 域名替换模式）；
-  3. 并发对候选发 HEAD/Range:0-0 测速，选"可用且支持 Range、耗时最短"的镜像；
-  4. 若全部镜像不可用，退回原始直连地址。
+  3. 并发对候选发 Range 请求，实际读一小段计时，按"支持 Range + 吞吐"排序；
+  4. 下载器可同时使用前几名镜像，让不同分块分别连接不同主机，叠加吞吐。
 """
 
 import time
+from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 
 USER_AGENT = "Mozilla/5.0 NetHelper/1.0"
-PROBE_TIMEOUT = 3.5     # 单个候选镜像探测超时（秒），避免拖慢下载启动
-PROBE_RANGE = "bytes=0-0"   # 只取 1 字节即可判定可用性 + 是否支持 Range
-MAX_PROBE = 6           # 同时并发探测的候选上限，控制资源占用
+PROBE_TIMEOUT = 4.0        # 单个候选镜像探测超时（秒）
+PROBE_BYTES = 64 * 1024    # 实测吞吐时最多读取的字节数
+MAX_PROBE = 6              # 同时并发探测的候选上限
+MAX_SOURCES = 3            # 返回给下载器的最优源数量
+PROBE_RANGE = f"bytes=0-{PROBE_BYTES - 1}"
+
+Source = namedtuple("Source", "url supports_range total speed_bps")
 
 # 前缀加速镜像（在原始 URL 前加前缀）。顺序即优先级倾向，真正取舍以测速为准。
 GH_PREFIX_MIRRORS = [
@@ -84,48 +89,84 @@ def build_mirror_urls(url):
     return result
 
 
-def _probe_one(url):
-    """探测单个候选可用性，返回可用则 (elapsed, status, url)，否则 None"""
+def _parse_total(content_range):
+    """从 Content-Range: bytes 0-65535/123456 中解析总大小"""
+    try:
+        tail = (content_range or "").rsplit("/", 1)[-1].strip()
+        return int(tail)
+    except (ValueError, AttributeError):
+        return 0
+
+
+def _probe_one(url, timeout=PROBE_TIMEOUT):
+    """实测单个候选：读一小段，返回 Source；不可用时返回 None。"""
     import urllib.error
     import urllib.request
+    # 延迟导入，避免与 downloader 形成顶层循环依赖
+    from .downloader import open_url, validate_url
     try:
-        req = urllib.request.Request(
-            url, headers={"User-Agent": USER_AGENT, "Range": PROBE_RANGE})
-        t0 = time.time()
-        with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as resp:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": USER_AGENT,
+            "Range": PROBE_RANGE,
+            "Accept-Encoding": "identity",
+        })
+        t0 = time.perf_counter()
+        with open_url(req, timeout) as resp:
             code = resp.status
-        if code in (200, 206):
-            return (time.time() - t0, code, url)
-    except (urllib.error.URLError, urllib.error.HTTPError,
-            OSError, ValueError, TimeoutError):
-        pass
-    return None
+            if code not in (200, 206):
+                return None
+            total = _parse_total(resp.headers.get("Content-Range"))
+            final_url = resp.geturl() or url
+            data = resp.read(PROBE_BYTES)
+        elapsed = max(time.perf_counter() - t0, 1e-3)
+        if validate_url(final_url):
+            return None
+        if not data:
+            return None
+        return Source(
+            url=url,
+            supports_range=(code == 206),
+            total=total,
+            speed_bps=len(data) / elapsed,
+        )
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
 
 
-def pick_fastest_url(url):
+def probe_sources(url, timeout=PROBE_TIMEOUT):
     """
-    返回最优下载地址：可用且支持 Range、耗时最短的候选镜像；
-    不可镜像 / 全部镜像不可用 / 无候选时，返回原始 url。
+    并发探测候选镜像，按"支持 Range 优先、吞吐从高到低"返回可用源列表。
+    不可镜像时返回 [Source(url, ...)] 由调用方决定是否使用。
     """
     cands = build_mirror_urls(url)
-    if len(cands) <= 1:
-        return url
+    if not cands:
+        return []
     found = []
     workers = min(MAX_PROBE, len(cands))
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = [ex.submit(_probe_one, c) for c in cands]
-        # 按完成顺序收集：先返回的候选先入池，不必等最慢的探测结束
+        futs = [ex.submit(_probe_one, c, timeout) for c in cands]
         try:
-            for f in as_completed(futs, timeout=PROBE_TIMEOUT + 1.0):
-                r = f.result()
-                if r:
+            for f in as_completed(futs, timeout=timeout + 1.5):
+                try:
+                    r = f.result()
+                except Exception:
+                    r = None
+                if r is not None:
                     found.append(r)
         except FuturesTimeout:
             pass
-    if not found:
+    seen, uniq = set(), []
+    for r in found:
+        if r.url not in seen:
+            seen.add(r.url)
+            uniq.append(r)
+    uniq.sort(key=lambda r: (not r.supports_range, -r.speed_bps))
+    return uniq
+
+
+def pick_fastest_url(url):
+    """返回吞吐最高的可用地址；没有可用镜像时返回原始 url。"""
+    if len(build_mirror_urls(url)) <= 1:
         return url
-    # 优先支持 Range(206) 的镜像，其次耗时最短
-    range_ok = [x for x in found if x[1] == 206]
-    pool = range_ok if range_ok else found
-    pool.sort(key=lambda x: x[0])
-    return pool[0][2]
+    ranked = probe_sources(url)
+    return ranked[0].url if ranked else url

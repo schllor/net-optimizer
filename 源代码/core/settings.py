@@ -17,6 +17,7 @@ DEFAULTS = {
     "speed_ul_seconds": 6,
     "dns_rounds": 3,
     "history_limit": 20,
+    "download_connections": 8,
     "animations": True,
     "native_api": True,
     "traffic_include_vpn": False,
