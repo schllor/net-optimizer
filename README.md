@@ -19,6 +19,17 @@
 | 多线程下载器 | 动态分块 + 自适应并发 + 多源加速，支持暂停 / 取消 / 断点续传，大文件自动提速 |
 | 设置 | 测速时长、DNS 轮数、历史条数、下载并发连接、原生 API 开关、VPN 流量统计与界面动画 |
 
+### v2.0.0 可读性、适配与真实数据
+
+- **不再用演示数据冒充结果**：首页趋势、修复日志、DNS 推荐、Wi-Fi 邻区、设备列表、下载镜像、测速历史等示例数据全部下线；没有数据时显示「待检测 / 尚未扫描 / 暂无记录」，每个数字都能追溯到真实来源。
+- **状态中枢**：新增 `AppState` 与 `NetworkSnapshot`，标题栏 / 状态栏 / 首页共用同一份真实网络快照（SSID、频段、信道、IP、网关、DNS、协商速率），后台按 30 秒刷新，不再各自读盘或写死。
+- **排版与对比度**：移除全局 `font-size: 12px` 覆盖与各页 `_lock_fonts()` 补丁；最小文字 10px、正文 13px，三级灰字对比度全部达到 WCAG AA（≥4.5:1）。
+- **响应式**：支持 1024×640 起、100%–200% 缩放；窄窗口自动切换图标侧栏、单列页面、页头动作换行和纵向滚动；窗口位置/大小/最大化状态自动记忆。
+- **修复更诚实**：开始前列出需要管理员权限 / 需要重启 / 可回滚的项；代理设置修改前自动备份；删除假的「一键回滚」和预置修复成功日志；修复完成后可一键重新诊断。
+- **首次引导**：首页增加 3 步引导（体检 → 修复 → 复查）；诊断完成后只修复检测到的问题，并自动复检。
+- **更友好的反馈**：复制、导出、保存、DNS 应用等操作增加 Toast 提示；诊断结论、DNS 收益、测速分享/保存报告都改为真实数据。
+- **DPI 与无障碍**：新增 PerMonitorV2 清单、图标按屏幕 DPR 渲染；自绘导航/开关支持键盘操作与焦点环。
+
 ### v1.9.0 下载器提速
 
 - **动态分块 + 自适应并发**：不再固定 3 路等分。先开 4 路，监督线程每秒把「剩余最多的段」对半切开交给新连接；第 2/4/6 秒按实测速度决定是否继续加到设置上限（默认 8，最高 16），速度不再提升就停止加线程。
@@ -67,27 +78,42 @@
 
 ```bash
 git clone <本仓库地址>
-cd 源代码
-pip install -r requirements.txt
-python main.py
+cd Windows
+pip install -r requirements-dev.txt   # 仅运行程序可用 requirements.txt
+python src/main.py
 ```
 
 运行环境：Python 3.9+ / Windows 10 及以上（Qt6 已不再支持 Windows 7/8）。
+
+### 方式三：运行测试
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+`tests/conftest.py` 会自动把 `src/` 加入导入路径，并以 `QT_QPA_PLATFORM=offscreen` 运行，无需真实显示器。
 
 ---
 
 ## 从源码打包 EXE
 
 ```bash
-cd 源代码
-pip install pyinstaller
-pyinstaller 网络优化助手.spec --noconfirm
+pip install -r requirements-dev.txt
+cd packaging
+build.bat
 ```
 
-产物位于 `dist/网络优化助手.exe`。
+或手动执行：
 
-> **关于中文字体**：程序优先使用系统的微软雅黑 / 黑体等中文字体，仅当系统缺少中文字体时才回退到随包注册的 `fonts/simhei.ttf`。
-> 由于 SimHei 属于微软 / 中易的**专有字体**，本仓库不包含该文件。若你需要完全脱离系统字体的独立打包，请自行将合法的字体文件放入 `源代码/fonts/` 目录。
+```bash
+pyinstaller packaging/网络优化助手.spec --noconfirm --workpath packaging/build --distpath packaging/dist
+```
+
+产物位于 `packaging/dist/网络优化助手.exe`。
+
+> **关于中文字体**：程序优先使用系统的微软雅黑 / 黑体等中文字体，仅当系统缺少中文字体时才回退到随包注册的 `src/assets/fonts/simhei.ttf`。
+> 由于 SimHei 属于微软 / 中易的**专有字体**，本仓库不包含该文件。若你需要完全脱离系统字体的独立打包，请自行将合法的字体文件放入 `src/assets/fonts/` 目录。
 
 ---
 
@@ -95,54 +121,82 @@ pyinstaller 网络优化助手.spec --noconfirm
 
 ```
 .
-├── 使用说明.md              # 面向普通用户的功能说明
-├── 研究思路报告.md          # 项目设计与技术选型
-└── 源代码/
-    ├── main.py              # 程序入口
-    ├── core/                # 核心逻辑
-    │   ├── diagnostic.py    #   网络诊断
-    │   ├── repair.py        #   网络修复
-    │   ├── speed_test.py    #   网速测试
-    │   ├── net_quality.py   #   延迟统计、抖动与稳定窗口吞吐
-    │   ├── dns_optimizer.py #   DNS 测速、DoH 校验与切换
-    │   ├── wifi_check.py    #   Wi-Fi 检测
-    │   ├── lan_scan.py      #   局域网设备扫描
-    │   ├── winapi_common.py #   原生 API 加载与 WLAN 会话
-    │   ├── winapi_wifi.py   #   WlanAPI：当前连接与 BSS 扫描
-    │   ├── winapi_net.py    #   GetAdaptersAddresses：DNS 服务器
-    │   ├── winapi_arp.py    #   GetIpNetTable2 / SendARP 邻居探测
-    │   ├── admin.py         #   管理员权限检测与提权
-    │   ├── settings.py      #   用户设置（JSON 原子写入）
-    │   ├── report.py        #   报告渲染与导出（MD/JSON/TXT）
-    │   ├── traffic_monitor.py # 实时流量采集
-    │   ├── cache.py         #   历史记录与设备名称缓存
-    │   ├── cmd_utils.py     #   系统命令封装
-    │   ├── netinfo.py       #   路由、网关与 DNS 信息解析
-    │   ├── theme.py         #   黑白极简主题
-    │   └── paths.py         #   运行路径处理
-    ├── ui/
-    │   ├── main_window.py   # 主窗口：模块装配、导航、线程生命周期
-    │   ├── shell.py         # 窗口骨架：侧边栏、内容区、全局样式与调色板
-    │   ├── titlebar.py      # 自绘标题栏（无边框窗口的拖动与窗口按钮）
-    │   ├── workers.py       # 后台工作线程（诊断/修复/测速/DNS/Wi-Fi/扫描/下载/流量）
-    │   ├── common.py        # 公共配色别名与状态等级映射
-    │   ├── widgets.py       # 自定义控件（信号弧、评分环、延迟条、顶部彗星进度条）
-    │   └── pages/           # 十个功能页面（按功能拆分的 mixin）
-    │       ├── home.py      #   首页
-    │       ├── diagnose.py  #   网络诊断
-    │       ├── repair.py    #   网络修复
-    │       ├── speed.py     #   网速测试
-    │       ├── dns.py       #   DNS 优化
-    │       ├── devices.py   #   设备管理
-    │       ├── wifi.py      #   Wi-Fi 检测
-    │       ├── downloader.py#   多线程下载器
-    │       ├── history.py   #   历史记录
-    │       └── settings.py  #   设置
-    ├── tests/               # 单元测试
-    ├── fonts/               # 字体目录（不含专有字体）
-    ├── requirements.txt
-    └── 网络优化助手.spec     # PyInstaller 打包配置
+├── src/                      # 应用源码（运行与打包的根目录）
+│   ├── main.py               # 程序入口：字体、图标与主窗口装配
+│   ├── core/                 # 核心逻辑（与界面无关）
+│   │   ├── diagnostic.py     #   网络诊断
+│   │   ├── repair.py         #   网络修复
+│   │   ├── speed_test.py     #   网速测试
+│   │   ├── net_quality.py    #   延迟统计、抖动与稳定窗口吞吐
+│   │   ├── dns_optimizer.py  #   DNS 测速、DoH 校验与切换
+│   │   ├── wifi_check.py     #   Wi-Fi 检测
+│   │   ├── lan_scan.py       #   局域网设备扫描
+│   │   ├── winapi_common.py  #   原生 API 加载与 WLAN 会话
+│   │   ├── winapi_wifi.py    #   WlanAPI：当前连接与 BSS 扫描
+│   │   ├── winapi_net.py     #   GetAdaptersAddresses：DNS 服务器
+│   │   ├── winapi_arp.py     #   GetIpNetTable2 / SendARP 邻居探测
+│   │   ├── admin.py          #   管理员权限检测与提权
+│   │   ├── settings.py       #   用户设置（JSON 原子写入）
+│   │   ├── report.py         #   报告渲染与导出（MD/JSON/TXT）
+│   │   ├── net_snapshot.py   #   当前网络快照（SSID/IP/网关/DNS/速率）
+│   │   ├── traffic_monitor.py#   实时流量采集
+│   │   ├── cache.py          #   历史记录与设备名称缓存
+│   │   ├── cmd_utils.py      #   系统命令封装
+│   │   ├── netinfo.py        #   路由、网关与 DNS 信息解析
+│   │   ├── theme.py          #   设计令牌：颜色、圆角、按钮与卡片样式
+│   │   ├── version.py        #   版本号
+│   │   └── paths.py          #   运行路径处理（源码 / 打包）
+│   ├── ui/
+│   │   ├── main_window.py    #   主窗口：模块装配、导航、线程生命周期
+│   │   ├── shell.py          #   窗口骨架：侧边栏、内容区、全局样式与调色板
+│   │   ├── titlebar.py       #   自绘标题栏（无边框窗口的拖动与窗口按钮）
+│   │   ├── responsive.py     #   断点、两列转单列与页面滚动
+│   │   ├── state.py          #   AppState：最近结果、快照与流量信号
+│   │   ├── toast.py          #   轻量操作反馈
+│   │   ├── workers.py        #   后台工作线程（诊断/修复/测速/DNS/Wi-Fi/扫描/下载/流量）
+│   │   ├── widgets.py        #   自定义控件（信号弧、评分环、延迟条、彗星进度条）
+│   │   └── pages/            #   十个功能页面（按功能拆分的 mixin）
+│   │       ├── home.py       #     首页
+│   │       ├── diagnose.py   #     网络诊断
+│   │       ├── repair.py     #     网络修复
+│   │       ├── speed.py      #     网速测试
+│   │       ├── dns.py        #     DNS 优化
+│   │       ├── devices.py    #     设备管理
+│   │       ├── wifi.py       #     Wi-Fi 检测
+│   │       ├── downloader.py #     多线程下载器
+│   │       ├── history.py    #     历史记录
+│   │       └── settings.py   #     设置
+│   └── assets/               # 随包资源
+│       ├── fonts/            #   字体目录（不含专有字体）
+│       └── icons/            #   应用图标 app.png / app.ico
+├── tests/                    # 单元测试（pytest）
+├── packaging/                # 打包相关
+│   ├── 网络优化助手.spec      #   PyInstaller 配置
+│   ├── build.bat             #   一键打包脚本
+│   └── pyi_rth_network_assistant.py
+├── design/                   # 设计交付物
+│   ├── ui-samples.html       #   黑色主题设计系统 + 10 个界面样例
+│   ├── icons.html            #   5 个吉祥物图标方案总览
+│   └── icons/                #   图标原图
+├── docs/                     # 面向用户与开发者的文档
+├── artifacts/                # 本地构建 / 截图等临时产物（不入库）
+├── requirements.txt          # 运行时依赖
+├── requirements-dev.txt      # 开发与打包依赖
+└── pyproject.toml            # 项目元数据与 pytest 配置
 ```
+
+---
+
+## 设计稿
+
+| 入口 | 内容 |
+| --- | --- |
+| [`design/ui-samples.html`](design/ui-samples.html) | 黑色主题设计系统（色板 / 字阶 / 组件）+ 10 个 1280×800 界面样例 |
+| [`design/icons.html`](design/icons.html) | 5 个 Wi-Fi × 二次元吉祥物图标方案、尺寸预览与落地效果 |
+
+两个页面都是自包含 HTML，直接用浏览器打开即可；`ui-samples.html?screen=3` 可单独预览第 3 屏。
+
+配色约定：黑 `#040405` 为底，白 `#F3F4F6` 为骨，信号绿 `#8BFFD1` 与琥珀 `#FFC46B` 合计不超过 5% 面积。所有颜色统一在 [`src/core/theme.py`](src/core/theme.py) 定义，界面层只引用令牌，不再各自写死色值。
 
 ---
 

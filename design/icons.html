@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>网络优化助手 · 图标方案（Wi-Fi 小狗）</title>
+<style>
+  :root{
+    --void:#040405;
+    --surface:#0a0a0c;
+    --line:rgba(255,255,255,.075);
+    --paper:#f3f4f6;
+    --text-2:rgba(243,244,246,.72);
+    --text-3:rgba(243,244,246,.46);
+    --text-4:rgba(243,244,246,.28);
+    --mint:#8bffd1;
+    --radius:14px;
+    --mono:"JetBrains Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--void);color:var(--paper);
+    font-family:"HarmonyOS Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+    padding:64px 56px 80px;
+  }
+  .eyebrow{font:10px/1 var(--mono);letter-spacing:.18em;color:var(--text-4);text-transform:uppercase}
+  h1{font-size:44px;font-weight:600;letter-spacing:-.02em;margin:16px 0 10px}
+  .lede{font-size:13px;line-height:1.9;color:var(--text-3);max-width:660px}
+  .meta{display:flex;gap:26px;margin-top:26px;font:10px/1 var(--mono);color:var(--text-4);flex-wrap:wrap}
+  .meta b{color:var(--text-2);font-weight:500}
+
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-top:52px}
+  .card{
+    border:1px solid var(--line);border-radius:var(--radius);
+    background:linear-gradient(180deg,rgba(255,255,255,.024),rgba(255,255,255,.006));
+    padding:18px;position:relative;overflow:hidden;
+  }
+  .card.pick{border-color:rgba(139,255,209,.38);box-shadow:0 0 0 1px rgba(139,255,209,.12),0 18px 40px rgba(0,0,0,.5)}
+  .badge{
+    position:absolute;top:14px;right:14px;font:8px/1 var(--mono);letter-spacing:.14em;
+    color:var(--void);background:var(--mint);border-radius:999px;padding:5px 8px;
+  }
+  .shot{
+    width:100%;aspect-ratio:1/1;border-radius:22px;overflow:hidden;
+    border:1px solid var(--line);background:var(--surface);
+  }
+  .shot img{width:100%;height:100%;object-fit:cover;display:block}
+  .name{font-size:12px;font-weight:600;margin-top:14px}
+  .idx{font:9px/1 var(--mono);color:var(--text-4);margin-bottom:6px}
+  .desc{font-size:10px;line-height:1.7;color:var(--text-3);margin-top:6px;min-height:50px}
+  .keep{font:8.5px/1 var(--mono);color:var(--text-4);margin-top:8px;letter-spacing:.06em}
+  .sizes{display:flex;align-items:flex-end;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+  .sizes figure{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .sizes img{border-radius:6px;display:block;object-fit:cover}
+  .sizes span{font:8px/1 var(--mono);color:var(--text-4)}
+
+  .sect{margin-top:64px}
+  .sect-head{display:flex;align-items:baseline;gap:14px;margin-bottom:20px}
+  .sect-head .n{font:10px/1 var(--mono);color:var(--text-4)}
+  .sect-head h2{font-size:19px;font-weight:600;letter-spacing:-.01em}
+
+  .use{display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:16px}
+  .use .card{padding:22px}
+  .use-label{font:9px/1 var(--mono);letter-spacing:.14em;color:var(--text-4);margin-bottom:16px}
+  .taskbar{
+    display:flex;align-items:center;gap:12px;background:rgba(255,255,255,.045);
+    border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+  }
+  .taskbar img{width:26px;height:26px;border-radius:6px}
+  .taskbar .t{font-size:10px;color:var(--text-2)}
+  .taskbar .s{font:8px/1 var(--mono);color:var(--text-4);margin-top:4px}
+  .about{display:flex;align-items:center;gap:14px}
+  .about img{width:56px;height:56px;border-radius:14px}
+  .about .t{font-size:13px;font-weight:600}
+  .about .s{font:8px/1 var(--mono);color:var(--text-4);margin-top:6px;letter-spacing:.1em}
+  .about .g{display:flex;align-items:center;gap:6px;margin-top:9px;font-size:8.5px;color:var(--mint)}
+  .dot{width:5px;height:5px;border-radius:50%;background:var(--mint);display:inline-block}
+  .rules{font-size:10px;line-height:2;color:var(--text-3)}
+  .rules b{color:var(--paper);font-weight:500}
+  .rules i{font-style:normal;font-family:var(--mono);font-size:9px;color:var(--text-4)}
+
+  .row-5{display:flex;gap:14px;margin-top:22px}
+  .row-5 img{width:96px;height:96px;border-radius:22px;border:1px solid var(--line);object-fit:cover}
+  .foot{margin-top:56px;font:9px/1.9 var(--mono);color:var(--text-4);letter-spacing:.08em}
+</style>
+</head>
+<body>
+
+  <div class="eyebrow">Identity / Wi-Fi Dog Set</div>
+  <h1>会摇尾巴的 Wi-Fi。</h1>
+  <p class="lede">
+    先画 Wi-Fi，再加小狗。每个方案里，标准 Wi-Fi 图标（三道圆角弧 ＋ 圆点）都是原样保留的主体，
+    占画面约 60%；小狗只负责「加戏」，不改写信号本身。黑底、白线、薄荷绿只点在舌头或眼睛里。
+  </p>
+  <div class="meta">
+    <span><b>WIFI</b> · 主体保留 ≈60%</span>
+    <span><b>STYLE</b> · Q 版小狗 / 平涂矢量</span>
+    <span><b>ACCENT</b> · #8BFFD1 &lt; 5%</span>
+  </div>
+
+  <div class="grid">
+    <div class="card pick">
+      <div class="badge">主图标</div>
+      <div class="shot"><img src="icons/wifi-dog-01.jpg" alt="方案一"></div>
+      <div class="idx">01</div>
+      <div class="name">探头小狗</div>
+      <div class="desc">小狗趴在最外层弧线上方，只露半个头和两只爪子。Wi-Fi 完全没被打扰，识别度最高。</div>
+      <div class="keep">WIFI 完整度 · 100%</div>
+      <div class="sizes">
+        <figure><img src="icons/wifi-dog-01.jpg" width="44" height="44"><span>44</span></figure>
+        <figure><img src="icons/wifi-dog-01.jpg" width="32" height="32"><span>32</span></figure>
+        <figure><img src="icons/wifi-dog-01.jpg" width="24" height="24"><span>24</span></figure>
+        <figure><img src="icons/wifi-dog-01.jpg" width="16" height="16"><span>16</span></figure>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="shot"><img src="icons/wifi-dog-03.jpg" alt="方案二"></div>
+      <div class="idx">02</div>
+      <div class="name">弧上小坐</div>
+      <div class="desc">小狗坐在中间那道弧上晃腿，三道弧与圆点全部保留，像把信号当成了长椅。</div>
+      <div class="keep">WIFI 完整度 · 100%</div>
+      <div class="sizes">
+        <figure><img src="icons/wifi-dog-03.jpg" width="44" height="44"><span>44</span></figure>
+        <figure><img src="icons/wifi-dog-03.jpg" width="32" height="32"><span>32</span></figure>
+        <figure><img src="icons/wifi-dog-03.jpg" width="24" height="24"><span>24</span></figure>
+        <figure><img src="icons/wifi-dog-03.jpg" width="16" height="16"><span>16</span></figure>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="shot"><img src="icons/wifi-dog-04.jpg" alt="方案三"></div>
+      <div class="idx">03</div>
+      <div class="name">趴着连网</div>
+      <div class="desc">一只毛茸茸的小狗摊在最下方，三道弧完整悬在上方。软塌塌的造型最治愈。</div>
+      <div class="keep">WIFI 完整度 · 90%（圆点被遮）</div>
+      <div class="sizes">
+        <figure><img src="icons/wifi-dog-04.jpg" width="44" height="44"><span>44</span></figure>
+        <figure><img src="icons/wifi-dog-04.jpg" width="32" height="32"><span>32</span></figure>
+        <figure><img src="icons/wifi-dog-04.jpg" width="24" height="24"><span>24</span></figure>
+        <figure><img src="icons/wifi-dog-04.jpg" width="16" height="16"><span>16</span></figure>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="shot"><img src="icons/wifi-dog-02b.jpg" alt="方案四"></div>
+      <div class="idx">04</div>
+      <div class="name">弧下小狗头</div>
+      <div class="desc">三道弧当作光环，圆点位置换成一颗圆滚滚的狗头，吐着舌头。最「表情包」的一个。</div>
+      <div class="keep">WIFI 完整度 · 75%（圆点被替换）</div>
+      <div class="sizes">
+        <figure><img src="icons/wifi-dog-02b.jpg" width="44" height="44"><span>44</span></figure>
+        <figure><img src="icons/wifi-dog-02b.jpg" width="32" height="32"><span>32</span></figure>
+        <figure><img src="icons/wifi-dog-02b.jpg" width="24" height="24"><span>24</span></figure>
+        <figure><img src="icons/wifi-dog-02b.jpg" width="16" height="16"><span>16</span></figure>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="shot"><img src="icons/wifi-dog-05c.jpg" alt="方案五"></div>
+      <div class="idx">05</div>
+      <div class="name">侧边打招呼</div>
+      <div class="desc">小狗从弧线右下角探出来抬手打招呼，Wi-Fi 保持完整，适合做「已连接」类状态图标。</div>
+      <div class="keep">WIFI 完整度 · 100%</div>
+      <div class="sizes">
+        <figure><img src="icons/wifi-dog-05c.jpg" width="44" height="44"><span>44</span></figure>
+        <figure><img src="icons/wifi-dog-05c.jpg" width="32" height="32"><span>32</span></figure>
+        <figure><img src="icons/wifi-dog-05c.jpg" width="24" height="24"><span>24</span></figure>
+        <figure><img src="icons/wifi-dog-05c.jpg" width="16" height="16"><span>16</span></figure>
+      </div>
+    </div>
+  </div>
+
+  <div class="sect">
+    <div class="sect-head"><span class="n">02</span><h2>落地效果</h2></div>
+    <div class="use">
+      <div class="card">
+        <div class="use-label">TASKBAR / 26 PX</div>
+        <div class="taskbar">
+          <img src="icons/wifi-dog-01.jpg" alt="">
+          <div>
+            <div class="t">网络优化助手</div>
+            <div class="s">运行中 · 已连接 5 GHz</div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="use-label">ABOUT / 56 PX</div>
+        <div class="about">
+          <img src="icons/wifi-dog-01.jpg" alt="">
+          <div>
+            <div class="t">网络优化助手</div>
+            <div class="s">VERSION 1.9.0 · NOCTURNE</div>
+            <div class="g"><span class="dot"></span>已是最新版本</div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="use-label">RULES</div>
+        <div class="rules">
+          <b>主体</b> 标准 Wi-Fi 三道弧 ＋ 圆点，不改角度、不改方向<br>
+          <b>占比</b> Wi-Fi 约占 60%，小狗不压住圆点与弧端<br>
+          <b>线条</b> 统一圆头描边，白线黑底，无渐变无阴影<br>
+          <b>点缀</b> 薄荷绿只落在舌头 / 眼睛高光 <i>#8BFFD1</i><br>
+          <b>缩小</b> 16 px 仍能看出「Wi-Fi ＋ 一张狗脸」
+        </div>
+      </div>
+    </div>
+
+    <div class="row-5">
+      <img src="icons/wifi-dog-01.jpg" alt="">
+      <img src="icons/wifi-dog-03.jpg" alt="">
+      <img src="icons/wifi-dog-04.jpg" alt="">
+      <img src="icons/wifi-dog-02b.jpg" alt="">
+      <img src="icons/wifi-dog-05c.jpg" alt="">
+    </div>
+  </div>
+
+  <div class="foot">NOCTURNE · WIFI DOG SET · 2026.11 · 选定方案后可导出 app.png / app.ico（16–256 px）</div>
+
+</body>
+</html>

@@ -6,28 +6,31 @@
 
 # ---------- 运行期数据：真实网络隐私 ----------
 data/
-源代码/data/
+src/data/
+artifacts/
 **/wifi_diag.txt
 **/history.json
 **/device_aliases.json
 
-# ---------- 打包产物与构建缓存（约 700MB）----------
+# ---------- 打包产物与构建缓存 ----------
 build/
 build_*/
 dist/
 dist_*/
-源代码/build/
-源代码/build_*/
-源代码/dist/
-源代码/dist_*/
+packaging/build/
+packaging/dist/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 
 # ---------- 专有字体：微软/中易 SimHei，不公开再分发 ----------
-源代码/fonts/*.ttf
-源代码/fonts/*.ttc
-源代码/fonts/*.otf
+src/assets/fonts/*.ttf
+src/assets/fonts/*.ttc
+src/assets/fonts/*.otf
+
+# ---------- 临时产物：截图 / 预览包 ----------
+.screenshots/
+.trae-html-share-packages/
 
 # ---------- 虚拟环境 ----------
 .venv/

@@ -1,0 +1,5 @@
+# 网络优化助手 - 开发与打包依赖
+-r requirements.txt
+
+pytest>=7.0
+pyinstaller>=5.0
